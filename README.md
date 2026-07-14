@@ -37,19 +37,19 @@ Detect the framework → Select the correct QA pipeline → Generate a beautiful
 ## Dashboard
 
 
-![Dashboard](./screenshots/dashboard.png)
+![Dashboard](https://raw.githubusercontent.com/zeel2306/-QA-Check-CLI/refs/heads/main/screenshots/dashboard.png)
 
 ---
 
 ## Audit Results
 
-![Audit Results](./screenshots/cards.png)
+![Audit Results](https://raw.githubusercontent.com/zeel2306/-QA-Check-CLI/refs/heads/main/screenshots/cards.png)
 
 ---
 
 ## Screenshot Gallery
 
-![Gallery](./screenshots/details.png)
+![Gallery](https://raw.githubusercontent.com/zeel2306/-QA-Check-CLI/refs/heads/main/screenshots/details.png)
 
 ---
 
