@@ -11,10 +11,120 @@ function escape(value: unknown): string {
       ]!,
   );
 }
+function getStatusColor(status: string): string {
+  switch (status) {
+    case "PASS":
+      return "#22c55e";
+    case "WARNING":
+      return "#f59e0b";
+    case "FAIL":
+      return "#ef4444";
+    default:
+      return "#64748b";
+  }
+}
+
+function progress(score?: number): string {
+  if (score === undefined) return "";
+
+  return `
+    <div class="progress">
+      <div class="progress-bar">
+        <div
+          class="progress-fill"
+          style="width:${Math.max(0, Math.min(score, 100))}%">
+        </div>
+      </div>
+      <span class="progress-text">${score}%</span>
+    </div>
+  `;
+}
 
 function card(result: CheckResult): string {
-  return `<article class="card ${result.status.toLowerCase()}"><header><h2>${escape(result.name)}</h2><span>${escape(result.status)}</span></header>${result.score === undefined ? "" : `<strong>${result.score}</strong><small>/100</small>`}<p>${escape(result.message)}</p><details><summary>Details</summary><pre>${escape(JSON.stringify(result.data, null, 2))}</pre></details></article>`;
+  const issueCount =
+    result.data &&
+    typeof result.data === "object" &&
+    "totalIssues" in (result.data as object)
+      ? Number((result.data as any).totalIssues)
+      : Array.isArray((result.data as any)?.issues)
+      ? (result.data as any).issues.length
+      : 0;
+
+  return `
+    <article class="card ${result.status.toLowerCase()}">
+
+      <div class="card-header">
+
+        <div>
+
+          <h2>${escape(result.name)}</h2>
+
+          <span
+            class="badge"
+            style="
+              color:${getStatusColor(result.status)};
+              background:${getStatusColor(result.status)}22;
+            ">
+
+            ${escape(result.status)}
+
+          </span>
+
+        </div>
+
+        ${
+          result.score !== undefined
+            ? `
+          <div class="score-box">
+
+            <div class="score-number">
+
+              ${result.score}
+
+            </div>
+
+            <small>/100</small>
+
+          </div>
+        `
+            : ""
+        }
+
+      </div>
+
+      ${progress(result.score)}
+
+      <div class="issue-summary">
+
+        ${
+          issueCount === 0
+            ? "✅ No issues detected"
+            : `⚠ ${issueCount} issue${issueCount > 1 ? "s" : ""}`
+        }
+
+      </div>
+
+      <p class="message">
+
+        ${escape(result.message)}
+
+      </p>
+
+      <details>
+
+        <summary>View Details</summary>
+
+        <pre>${escape(JSON.stringify(result.data, null, 2))}</pre>
+
+      </details>
+
+    </article>
+  `;
 }
+
+// function card(result: CheckResult): string {
+//   return `<article class="card ${result.status.toLowerCase()}"><header><h2>${escape(result.name)}</h2><span>${escape(result.status)}</span></header>${result.score === undefined ? "" : `<strong>${result.score}</strong><small>/100</small>`}<p>${escape(result.message)}</p><details><summary>Details</summary><pre>${escape(JSON.stringify(result.data, null, 2))}</pre></details></article>`;
+// }
 
 function list(items: string[]): string {
   return items.length ? items.map((item) => `<li>${escape(item)}</li>`).join("") : "<li>None</li>";
