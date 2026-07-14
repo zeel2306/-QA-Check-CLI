@@ -36,7 +36,6 @@ Detect the framework → Select the correct QA pipeline → Generate a beautiful
 
 ## Dashboard
 
-> Replace these images with your own screenshots.
 
 ![Dashboard](./screenshots/dashboard.png)
 

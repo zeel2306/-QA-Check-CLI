@@ -1,6 +1,6 @@
 {
   "name": "qa-check-cli",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Universal QA CLI for web projects.",
   "type": "module",
 
