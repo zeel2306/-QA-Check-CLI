@@ -50,9 +50,17 @@ jobs:
         run: |
           if [ -f package-lock.json ]; then
             npm ci
-          else
+          elif [ -f package.json ]; then
             npm install
+          else
+            echo "No package.json found. Skipping project dependency installation."
           fi
+
+      - name: Install browser dependencies
+        shell: bash
+        run: |
+          echo "Installing Playwright Chromium for browser-based QA checks."
+          npx playwright install --with-deps chromium
 
       # NEW: Build the latest TypeScript
       - name: Build QA Check CLI
@@ -139,5 +147,7 @@ jobs:
         if: always() && steps.qa.outputs.exit_code != '0'
         shell: bash
         run: |
-          echo "QA Check failed with exit code ${{ steps.qa.outputs.exit_code }}"
+          echo "QA Check completed, reports were uploaded when available."
+          echo "Failing this workflow because --ci returned exit code ${{ steps.qa.outputs.exit_code }}."
+          echo "This usually means one or more checks matched the configured --fail-on threshold (${FAIL_ON})."
           exit "${{ steps.qa.outputs.exit_code }}"
