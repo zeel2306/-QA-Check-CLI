@@ -32,6 +32,43 @@ export interface AuditReport {
   duration: number;
   overallScore: number;
   results: CheckResult[];
+  baseline?: BaselineComparison;
+}
+
+export interface BaselineComparison {
+  baselinePath?: string;
+  currentRun: string;
+  previousRun: string;
+  overallScore: {
+    current: number;
+    previous: number;
+    delta: number;
+  };
+  totalIssues: {
+    current: number;
+    previous: number;
+    delta: number;
+  };
+  checks: BaselineCheckComparison[];
+}
+
+export interface BaselineCheckComparison {
+  name: string;
+  status: {
+    current: CheckStatus;
+    previous?: CheckStatus;
+    changed: boolean;
+  };
+  score: {
+    current: number;
+    previous?: number;
+    delta?: number;
+  };
+  issues: {
+    current: number;
+    previous?: number;
+    delta?: number;
+  };
 }
 
 export interface BrowserIssue {

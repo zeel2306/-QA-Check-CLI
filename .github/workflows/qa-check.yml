@@ -1,0 +1,148 @@
+name: QA Check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      node_version:
+        description: "Node.js version"
+        required: false
+        default: "20"
+      fail_on:
+        description: "Fail on error or warning"
+        required: false
+        default: "error"
+        type: choice
+        options:
+          - error
+          - warning
+      report_dir:
+        description: "Report output folder"
+        required: false
+        default: "reports"
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: ${{ inputs.node_version || '20' }}
+  FAIL_ON: ${{ inputs.fail_on || 'error' }}
+  REPORT_DIR: ${{ inputs.report_dir || 'reports' }}
+
+jobs:
+  qa-check:
+    name: Run QA Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install project dependencies
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install
+          else
+            echo "No package.json found. Skipping project dependency installation."
+          fi
+
+      - name: Run QA Check CLI
+        id: qa
+        shell: bash
+        run: |
+          # Keep going after QA Check so report artifacts can still be uploaded.
+          set +e
+          echo "Running QA Check with --fail-on ${FAIL_ON}"
+          npx --yes qa-check-cli . --ci --pdf --fail-on "${FAIL_ON}" --output "${REPORT_DIR}"
+          exit_code=$?
+          echo "exit_code=${exit_code}" >> "${GITHUB_OUTPUT}"
+          echo "QA Check exit code: ${exit_code}"
+          exit 0
+
+      - name: Detect generated reports
+        id: reports
+        if: always()
+        shell: bash
+        run: |
+          # Upload only when at least one report file exists.
+          if [ -d "${REPORT_DIR}" ] && [ "$(find "${REPORT_DIR}" -type f | wc -l)" -gt 0 ]; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+            echo "Reports found in ${REPORT_DIR}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+            echo "No reports were generated."
+          fi
+
+      - name: Write QA Check job summary
+        if: always() && steps.reports.outputs.exists == 'true'
+        shell: bash
+        run: |
+          # Build a compact GitHub Job Summary from the generated JSON report.
+          node <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+
+          const reportDir = process.env.REPORT_DIR || "reports";
+          const reportPath = path.join(reportDir, "report.json");
+
+          if (!fs.existsSync(reportPath)) {
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+              "# QA CHECK REPORT",
+              "",
+              "Report JSON was not generated.",
+              "",
+            ].join("\n"));
+            process.exit(0);
+          }
+
+          const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+          const count = (status) => report.results.filter((result) => result.status === status).length;
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+            "# QA CHECK REPORT",
+            "",
+            "| Metric | Value |",
+            "| --- | --- |",
+            `| Framework | ${report.framework || "Unknown"} |`,
+            `| Pipeline | ${report.pipeline || "Unknown"} |`,
+            `| Overall Score | ${report.overallScore}/100 |`,
+            `| PASS | ${count("PASS")} |`,
+            `| WARNING | ${count("WARNING")} |`,
+            `| FAIL | ${count("FAIL")} |`,
+            `| SKIPPED | ${count("SKIPPED")} |`,
+            "",
+            "Report generated successfully.",
+            "",
+          ].join("\n"));
+          NODE
+
+      - name: Upload QA Check reports
+        if: always() && steps.reports.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-check-reports
+          path: |
+            ${{ env.REPORT_DIR }}/index.html
+            ${{ env.REPORT_DIR }}/report.json
+            ${{ env.REPORT_DIR }}/report.pdf
+            ${{ env.REPORT_DIR }}/screenshots/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Fail workflow when QA threshold is not met
+        if: always() && steps.qa.outputs.exit_code != '0'
+        shell: bash
+        run: |
+          # Fail after uploading artifacts, preserving reports for debugging.
+          echo "QA Check failed with exit code ${{ steps.qa.outputs.exit_code }}."
+          exit "${{ steps.qa.outputs.exit_code }}"

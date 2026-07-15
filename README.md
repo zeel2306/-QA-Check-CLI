@@ -67,6 +67,34 @@ Verify installation
 qa-check --version
 ```
 
+If `qa-check` is not recognized on Windows, the CLI is not available on your
+PATH yet. Install it globally first, or run it through `npx`:
+
+```bash
+npm install -g qa-check-cli
+qa-check --version
+```
+
+```bash
+npx qa-check-cli .
+```
+
+When developing this repository locally, build and link it before using the
+global command:
+
+```bash
+npm run build
+npm link
+qa-check --version
+```
+
+To debug PATH issues on Windows:
+
+```powershell
+where qa-check
+npm config get prefix
+```
+
 ---
 
 # 🚀 Usage
@@ -87,6 +115,19 @@ Laravel Example
 
 ```bash
 qa-check "C:\xampp\htdocs\LaravelProject"
+```
+
+Compare with a previous report
+
+```bash
+qa-check . --baseline "reports\report.json"
+```
+
+By default, QA Check compares the current run with the previous
+`reports/report.json` when it exists. Disable this with:
+
+```bash
+qa-check . --no-baseline
 ```
 
 ---
@@ -110,6 +151,105 @@ reports/index.html
 ```
 
 to view the complete interactive dashboard.
+
+---
+
+# GitHub Actions
+
+QA Check CLI includes a ready-to-use GitHub Actions workflow at:
+
+```text
+.github/workflows/qa-check.yml
+```
+
+The workflow runs on push, pull request, and manual workflow dispatch.
+
+It uses Node.js 20, installs project dependencies, runs QA Check in CI mode,
+generates HTML, JSON, PDF, and screenshot reports, then uploads them as
+downloadable workflow artifacts.
+
+Default command:
+
+```bash
+npx qa-check-cli . --ci --pdf --fail-on error --output reports
+```
+
+Uploaded artifacts:
+
+```text
+reports/index.html
+reports/report.json
+reports/report.pdf
+reports/screenshots/
+```
+
+## CI Failure Rules
+
+Fail only when a check has `FAIL` status:
+
+```bash
+--fail-on error
+```
+
+Fail when a check has `WARNING` or `FAIL` status:
+
+```bash
+--fail-on warning
+```
+
+## Configuration
+
+The workflow supports manual configuration through workflow dispatch:
+
+- Node version
+- Fail threshold: `error` or `warning`
+- Report output folder
+
+Default values:
+
+```yaml
+node_version: 20
+fail_on: error
+report_dir: reports
+```
+
+For push and pull request runs, edit the workflow `env` defaults in
+`.github/workflows/qa-check.yml`:
+
+```yaml
+env:
+  NODE_VERSION: 20
+  FAIL_ON: error
+  REPORT_DIR: reports
+```
+
+Use `FAIL_ON: warning` when warnings should block a pull request.
+Use `FAIL_ON: error` when only failed checks should block a pull request.
+
+## Example 1: Run on Every Push
+
+```yaml
+on:
+  push:
+```
+
+## Example 2: Run Only on Pull Requests
+
+```yaml
+on:
+  pull_request:
+```
+
+## Example 3: Manual Execution
+
+```yaml
+on:
+  workflow_dispatch:
+```
+
+The workflow writes a GitHub job summary with framework, pipeline, overall
+score, and PASS/WARNING/FAIL/SKIPPED counts. If QA fails, reports are still
+uploaded before the workflow exits with the QA Check CLI exit code.
 
 ---
 
