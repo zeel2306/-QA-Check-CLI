@@ -53,20 +53,67 @@ jobs:
           elif [ -f package.json ]; then
             npm install
           else
-            echo "No package.json found. Skipping project dependency installation."
+            echo "No package.json found."
+            exit 1
           fi
+
+      - name: Debug Environment
+        shell: bash
+        run: |
+          echo "========== DEBUG =========="
+          echo "Node Version:"
+          node -v
+
+          echo ""
+          echo "NPM Version:"
+          npm -v
+
+          echo ""
+          echo "NPX Version:"
+          npx -v
+
+          echo ""
+          echo "Current Directory:"
+          pwd
+
+          echo ""
+          echo "Repository Files:"
+          ls -la
+
+          echo ""
+          echo "Package:"
+          cat package.json
+
+          echo ""
+          echo "==========================="
 
       - name: Run QA Check CLI
         id: qa
         shell: bash
         run: |
-          # Keep going after QA Check so report artifacts can still be uploaded.
           set +e
-          echo "Running QA Check with --fail-on ${FAIL_ON}"
-          npx --yes qa-check-cli . --ci --pdf --fail-on "${FAIL_ON}" --output "${REPORT_DIR}"
-          exit_code=$?
-          echo "exit_code=${exit_code}" >> "${GITHUB_OUTPUT}"
-          echo "QA Check exit code: ${exit_code}"
+
+          echo "========== RUNNING QA CHECK =========="
+
+          echo "Trying package..."
+          npx --yes qa-check-cli --version
+
+          echo ""
+          echo "Running QA..."
+          npx --yes qa-check-cli . --ci --pdf --fail-on "${FAIL_ON}" --output "${REPORT_DIR}" 2>&1 | tee qa-output.log
+
+          EXIT_CODE=${PIPESTATUS[0]}
+
+          echo ""
+          echo "========== QA OUTPUT =========="
+          cat qa-output.log
+          echo "================================"
+
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "QA Exit Code: ${EXIT_CODE}"
+
           exit 0
 
       - name: Detect generated reports
@@ -74,59 +121,54 @@ jobs:
         if: always()
         shell: bash
         run: |
-          # Upload only when at least one report file exists.
           if [ -d "${REPORT_DIR}" ] && [ "$(find "${REPORT_DIR}" -type f | wc -l)" -gt 0 ]; then
-            echo "exists=true" >> "${GITHUB_OUTPUT}"
-            echo "Reports found in ${REPORT_DIR}"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Reports found."
           else
-            echo "exists=false" >> "${GITHUB_OUTPUT}"
-            echo "No reports were generated."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No reports found."
           fi
 
       - name: Write QA Check job summary
         if: always() && steps.reports.outputs.exists == 'true'
         shell: bash
         run: |
-          # Build a compact GitHub Job Summary from the generated JSON report.
           node <<'NODE'
           const fs = require("fs");
           const path = require("path");
 
-          const reportDir = process.env.REPORT_DIR || "reports";
-          const reportPath = path.join(reportDir, "report.json");
+          const reportPath = path.join(process.env.REPORT_DIR || "reports", "report.json");
 
           if (!fs.existsSync(reportPath)) {
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
-              "# QA CHECK REPORT",
-              "",
-              "Report JSON was not generated.",
-              "",
-            ].join("\n"));
+            console.log("No report.json found.");
             process.exit(0);
           }
 
-          const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-          const count = (status) => report.results.filter((result) => result.status === status).length;
+          const report = JSON.parse(fs.readFileSync(reportPath,"utf8"));
 
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
-            "# QA CHECK REPORT",
-            "",
-            "| Metric | Value |",
-            "| --- | --- |",
-            `| Framework | ${report.framework || "Unknown"} |`,
-            `| Pipeline | ${report.pipeline || "Unknown"} |`,
-            `| Overall Score | ${report.overallScore}/100 |`,
-            `| PASS | ${count("PASS")} |`,
-            `| WARNING | ${count("WARNING")} |`,
-            `| FAIL | ${count("FAIL")} |`,
-            `| SKIPPED | ${count("SKIPPED")} |`,
-            "",
-            "Report generated successfully.",
-            "",
-          ].join("\n"));
+          const count = s =>
+            report.results.filter(r => r.status === s).length;
+
+          fs.appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            `
+# QA CHECK REPORT
+
+| Metric | Value |
+| ------ | ----- |
+| Framework | ${report.framework} |
+| Pipeline | ${report.pipeline} |
+| Overall Score | ${report.overallScore}/100 |
+| PASS | ${count("PASS")} |
+| WARNING | ${count("WARNING")} |
+| FAIL | ${count("FAIL")} |
+| SKIPPED | ${count("SKIPPED")} |
+
+`
+          );
           NODE
 
-      - name: Upload QA Check reports
+      - name: Upload QA Reports
         if: always() && steps.reports.outputs.exists == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -137,12 +179,10 @@ jobs:
             ${{ env.REPORT_DIR }}/report.pdf
             ${{ env.REPORT_DIR }}/screenshots/**
           if-no-files-found: warn
-          retention-days: 14
 
       - name: Fail workflow when QA threshold is not met
         if: always() && steps.qa.outputs.exit_code != '0'
         shell: bash
         run: |
-          # Fail after uploading artifacts, preserving reports for debugging.
-          echo "QA Check failed with exit code ${{ steps.qa.outputs.exit_code }}."
+          echo "QA Check failed with exit code ${{ steps.qa.outputs.exit_code }}"
           exit "${{ steps.qa.outputs.exit_code }}"
