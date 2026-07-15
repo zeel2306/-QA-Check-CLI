@@ -129,45 +129,6 @@ jobs:
             echo "No reports found."
           fi
 
-      - name: Write QA Check job summary
-        if: always() && steps.reports.outputs.exists == 'true'
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require("fs");
-          const path = require("path");
-
-          const reportPath = path.join(process.env.REPORT_DIR || "reports", "report.json");
-
-          if (!fs.existsSync(reportPath)) {
-            console.log("No report.json found.");
-            process.exit(0);
-          }
-
-          const report = JSON.parse(fs.readFileSync(reportPath,"utf8"));
-
-          const count = s =>
-            report.results.filter(r => r.status === s).length;
-
-          fs.appendFileSync(
-            process.env.GITHUB_STEP_SUMMARY,
-            `
-# QA CHECK REPORT
-
-| Metric | Value |
-| ------ | ----- |
-| Framework | ${report.framework} |
-| Pipeline | ${report.pipeline} |
-| Overall Score | ${report.overallScore}/100 |
-| PASS | ${count("PASS")} |
-| WARNING | ${count("WARNING")} |
-| FAIL | ${count("FAIL")} |
-| SKIPPED | ${count("SKIPPED")} |
-
-`
-          );
-          NODE
-
       - name: Upload QA Reports
         if: always() && steps.reports.outputs.exists == 'true'
         uses: actions/upload-artifact@v4
