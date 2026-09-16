@@ -5,34 +5,33 @@ import { PipelineFactory } from "../pipeline/factory.js";
 import { PipelineRuntime } from "../pipeline/runtime.js";
 import { logger } from "./logger.js";
 import { calculateOverallScore, generateReports } from "./report.js";
-import type { AuditReport, Check, CheckResult } from "../types/result.js";
+import type { AuditReport, CheckResult } from "../types/result.js";
 import { compareWithBaseline, readBaselineReport } from "../baseline/compare.js";
+import { createCheckRegistry } from "../checks/registry.js";
+import type { QAContext } from "./context.js";
+import { executeCheck, toQACheck } from "./executor.js";
+import type { QaProfile } from "./profile.js";
 
 export interface QaEngineOptions {
+  profile?: QaProfile;
   ci?: boolean;
   html?: boolean;
   json?: boolean;
   pdf?: boolean;
   output?: string;
-  failOn?: "warning" | "error";
+  failOn?: "warning" | "error" | "none";
+  minScore?: number;
   baseline?: string;
   baselineComparison?: boolean;
 }
 
-async function execute(check: Check, projectPath: string): Promise<CheckResult> {
+async function readPackageJson(projectPath: string): Promise<Record<string, unknown> | undefined> {
   try {
-    const result = await check.run(projectPath);
-    logger.result(result);
-    return result;
-  } catch (error) {
-    const result: CheckResult = {
-      name: check.name,
-      status: "FAIL",
-      message: error instanceof Error ? error.message : String(error),
-      duration: 0,
-    };
-    logger.result(result);
-    return result;
+    return JSON.parse(
+      await fs.readFile(path.join(projectPath, "package.json"), "utf8"),
+    ) as Record<string, unknown>;
+  } catch {
+    return undefined;
   }
 }
 
@@ -66,21 +65,45 @@ export async function runQaEngine(
   console.log(`Framework\n\n✔ ${detection.framework}\n`);
   console.log(`Pipeline\n\n✔ ${pipeline.framework}\n`);
 
+  const routes = await runtime.routes().catch(() => []);
+  const packageJson = await readPackageJson(projectPath);
+  const context: QAContext = {
+    projectPath,
+    reportDir,
+    detection,
+    framework: detection.framework,
+    language: detection.language,
+    packageManager: detection.packageManager,
+    buildTool: detection.buildTool,
+    pipeline: pipeline.framework,
+    config: options,
+    routes,
+    logger,
+    environment: {
+      nodeVersion: process.version,
+      platform: process.platform,
+      ci: Boolean(options.ci),
+    },
+    runtime,
+    packageJson,
+  };
+
  try {
-  const checks = pipeline.checks();
+  const checks = pipeline.checks().map(toQACheck);
+  const registry = createCheckRegistry(checks);
+  const executionPlan = registry.getAll();
 
-  for (let index = 0; index < checks.length; index++) {
-    const check = checks[index];
+  for (let index = 0; index < executionPlan.length; index++) {
+    const check = executionPlan[index];
 
-    logger.start(index + 1, checks.length, check.name);
+    logger.start(index + 1, executionPlan.length, check.name);
 
-    results.push(await execute(check, projectPath));
+    results.push(await executeCheck(check, context));
   }
 } finally {
   await runtime.stop();
 }
 
-  const routes = await runtime.routes().catch(() => []);
   const baseUrl = await runtime.baseUrl();
   const duration = performance.now() - started;
   const overallScore = calculateOverallScore(results);

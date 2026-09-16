@@ -2,10 +2,19 @@ import type { AuditReport } from "../types/result.js";
 
 export function getExitCode(
   report: AuditReport,
-  failOn: "warning" | "error" = "error",
+  failOn: "warning" | "error" | "none" = "error",
+  minScore = 0,
 ): number {
+  if (minScore > 0 && report.overallScore < minScore) {
+    return 3;
+  }
+
+  if (failOn === "none") {
+    return 0;
+  }
+
   const hasFail = report.results.some(
-    (result) => result.status === "FAIL",
+    (result) => result.status === "FAIL" || result.status === "ERROR",
   );
 
   const hasWarning = report.results.some(

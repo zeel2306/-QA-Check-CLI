@@ -4,6 +4,7 @@ import { runQaEngine } from "./core/engine.js";
 import { getExitCode } from "./core/exitCode.js";
 import type { QaEngineOptions } from "./core/engine.js";
 import { loadConfig } from "./core/config.js";
+import { getProfileOptions, isQaProfile } from "./core/profile.js";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -11,65 +12,92 @@ async function main() {
   let projectPath = process.cwd();
 
 const options: QaEngineOptions = {};
+const explicitOptions: QaEngineOptions = {};
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
 
     switch (arg) {
       case "--ci":
-        options.ci = true;
+        explicitOptions.ci = true;
         break;
 
+      case "--profile": {
+        const value = args[++i];
+
+        if (isQaProfile(value)) {
+          options.profile = value;
+        } else {
+          console.error("Invalid value for --profile. Use 'report', 'ci', or 'strict'.");
+          process.exit(1);
+        }
+
+        break;
+      }
+
       case "--html":
-        options.html = true;
+        explicitOptions.html = true;
         break;
 
       case "--no-html":
-        options.html = false;
+        explicitOptions.html = false;
         break;
 
       case "--json":
-        options.json = true;
+        explicitOptions.json = true;
         break;
 
       case "--no-json":
-        options.json = false;
+        explicitOptions.json = false;
         break;
 
       case "--pdf":
-        options.pdf = true;
+        explicitOptions.pdf = true;
         break;
 
       case "--no-pdf":
-        options.pdf = false;
+        explicitOptions.pdf = false;
         break;
 
       case "--output":
-        options.output = args[++i] || "reports";
+        explicitOptions.output = args[++i] || "reports";
         break;
 
       case "--baseline":
-        options.baseline = args[++i];
+        explicitOptions.baseline = args[++i];
         break;
 
       case "--no-baseline":
-        options.baselineComparison = false;
+        explicitOptions.baselineComparison = false;
         break;
 
-    case "--fail-on": {
-  const value = args[++i];
+      case "--min-score": {
+        const value = Number(args[++i]);
 
-  if (value === "warning" || value === "error") {
-    options.failOn = value;
-  } else {
-    console.error(
-      "Invalid value for --fail-on. Use 'warning' or 'error'.",
-    );
-    process.exit(1);
-  }
+        if (Number.isFinite(value) && value >= 0 && value <= 100) {
+          explicitOptions.minScore = value;
+        } else {
+          console.error("Invalid value for --min-score. Use a number from 0 to 100.");
+          process.exit(1);
+        }
 
-  break;
-}
+        break;
+      }
+
+      case "--fail-on": {
+        const value = args[++i];
+
+        if (value === "warning" || value === "error" || value === "none") {
+          explicitOptions.failOn = value;
+        } else {
+          console.error(
+            "Invalid value for --fail-on. Use 'warning', 'error', or 'none'.",
+          );
+          process.exit(1);
+        }
+
+        break;
+      }
 
       default:
         if (!arg.startsWith("--")) {
@@ -82,6 +110,8 @@ const options: QaEngineOptions = {};
     path.resolve(projectPath),
   );
 const config = loadConfig(resolvedProjectPath);
+const configProfileOptions = getProfileOptions(config.profile);
+const cliProfileOptions = getProfileOptions(options.profile);
 const finalOptions: QaEngineOptions = {
   ci: false,
   html: true,
@@ -89,9 +119,13 @@ const finalOptions: QaEngineOptions = {
   pdf: true,
   output: "reports",
   failOn: "error",
+  minScore: 0,
 
+  ...configProfileOptions,
   ...config,
+  ...cliProfileOptions,
   ...options,
+  ...explicitOptions,
 };
   const report = await runQaEngine(
   resolvedProjectPath,
@@ -102,6 +136,7 @@ console.log("CI Mode:", finalOptions.ci);
 const exitCode = getExitCode(
   report,
   finalOptions.failOn,
+  finalOptions.minScore,
 );
 
 console.log("Exit Code:", exitCode);

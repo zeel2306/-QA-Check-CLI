@@ -9,14 +9,29 @@ on:
         description: "Node.js version"
         required: false
         default: "20"
-      fail_on:
-        description: "Fail on error or warning"
+      profile:
+        description: "QA profile"
         required: false
-        default: "error"
+        default: "ci"
         type: choice
         options:
+          - report
+          - ci
+          - strict
+      fail_on:
+        description: "Override profile fail rule"
+        required: false
+        default: "profile"
+        type: choice
+        options:
+          - profile
           - error
           - warning
+          - none
+      min_score:
+        description: "Override profile minimum score. Use profile to keep profile default."
+        required: false
+        default: "profile"
       report_dir:
         description: "Report output folder"
         required: false
@@ -26,9 +41,12 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: ${{ inputs.node_version || '20' }}
-  FAIL_ON: ${{ inputs.fail_on || 'error' }}
-  REPORT_DIR: ${{ inputs.report_dir || 'reports' }}
+  NODE_VERSION: ${{ github.event.inputs.node_version || '20' }}
+  QA_PROFILE: ${{ github.event.inputs.profile || 'ci' }}
+  FAIL_ON: ${{ github.event.inputs.fail_on || 'profile' }}
+  MIN_SCORE: ${{ github.event.inputs.min_score || 'profile' }}
+  REPORT_DIR: ${{ github.event.inputs.report_dir || 'reports' }}
+  QA_CHECK_PACKAGE: qa-check-cli@latest
 
 jobs:
   qa-check:
@@ -60,11 +78,7 @@ jobs:
         shell: bash
         run: |
           echo "Installing Playwright Chromium for browser-based QA checks."
-          npx playwright install --with-deps chromium
-
-      # NEW: Build the latest TypeScript
-      - name: Build QA Check CLI
-        run: npm run build
+          npx -y playwright install --with-deps chromium
 
       - name: Debug Environment
         shell: bash
@@ -82,14 +96,14 @@ jobs:
           ls -la
 
           echo ""
-          echo "Dist:"
-          ls -la dist || true
+          echo "QA Check package:"
+          echo "${QA_CHECK_PACKAGE}"
+          echo "QA Profile:"
+          echo "${QA_PROFILE}"
 
           echo ""
           echo "==========================="
 
-      # IMPORTANT:
-      # Run LOCAL code instead of downloading from npm
       - name: Run QA Check CLI
         id: qa
         shell: bash
@@ -98,11 +112,17 @@ jobs:
 
           echo "========== RUNNING QA CHECK =========="
 
-          node dist/index.js . \
-            --ci \
-            --pdf \
-            --fail-on "${FAIL_ON}" \
-            --output "${REPORT_DIR}" 2>&1 | tee qa-output.log
+          QA_ARGS=(. --ci --pdf --profile "${QA_PROFILE}" --output "${REPORT_DIR}")
+
+          if [ "${FAIL_ON}" != "profile" ]; then
+            QA_ARGS+=(--fail-on "${FAIL_ON}")
+          fi
+
+          if [ "${MIN_SCORE}" != "profile" ]; then
+            QA_ARGS+=(--min-score "${MIN_SCORE}")
+          fi
+
+          npx -y "${QA_CHECK_PACKAGE}" "${QA_ARGS[@]}" 2>&1 | tee qa-output.log
 
           EXIT_CODE=${PIPESTATUS[0]}
 
@@ -129,6 +149,48 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "No reports found."
           fi
+
+      - name: Write workflow summary
+        if: always() && steps.reports.outputs.exists == 'true'
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+
+          const reportDir = process.env.REPORT_DIR || "reports";
+          const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+          const reportPath = path.join(reportDir, "report.json");
+
+          if (!summaryPath || !fs.existsSync(reportPath)) {
+            process.exit(0);
+          }
+
+          const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+          const counts = { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, SKIPPED: 0 };
+
+          for (const result of report.results || []) {
+            counts[result.status] = (counts[result.status] || 0) + 1;
+          }
+
+          const lines = [
+            "# QA Check Report",
+            "",
+            `| Field | Value |`,
+            `| --- | --- |`,
+            `| Framework | ${report.framework || "Unknown"} |`,
+            `| Pipeline | ${report.pipeline || "Unknown"} |`,
+            `| Overall Score | ${report.overallScore ?? 0}/100 |`,
+            `| PASS | ${counts.PASS} |`,
+            `| WARNING | ${counts.WARNING} |`,
+            `| FAIL | ${counts.FAIL + counts.ERROR} |`,
+            `| SKIPPED | ${counts.SKIPPED} |`,
+            "",
+            "Reports were generated and uploaded when available.",
+          ];
+
+          fs.appendFileSync(summaryPath, `${lines.join("\n")}\n`);
+          NODE
 
       - name: Upload QA Reports
         if: always() && steps.reports.outputs.exists == 'true'

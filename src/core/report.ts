@@ -5,11 +5,27 @@ import { writePdfReport } from "../reporters/pdf.js";
 
 const WEIGHTED = new Set(["SEO", "Lighthouse", "Accessibility", "Performance"]);
 
+function resultScore(result: CheckResult): number {
+  if (typeof result.score === "number") return result.score;
+  if (result.status === "PASS") return 100;
+  if (result.status === "WARNING") return 60;
+  return 0;
+}
+
 export function calculateOverallScore(results: CheckResult[]): number {
-  const scored = results.filter((result) => result.score !== undefined && WEIGHTED.has(result.name));
-  if (scored.length) return Math.round(scored.reduce((sum, result) => sum + (result.score ?? 0), 0) / scored.length);
   const completed = results.filter((result) => result.status !== "SKIPPED");
-  return completed.length ? Math.round(completed.reduce((sum, result) => sum + (result.status === "PASS" ? 100 : result.status === "WARNING" ? 60 : 0), 0) / completed.length) : 0;
+
+  if (!completed.length) return 0;
+
+  const weighted = completed.flatMap((result) =>
+    WEIGHTED.has(result.name)
+      ? [resultScore(result), resultScore(result)]
+      : [resultScore(result)],
+  );
+
+  return Math.round(
+    weighted.reduce((sum, score) => sum + score, 0) / weighted.length,
+  );
 }
 export interface ReportOptions {
   html?: boolean;

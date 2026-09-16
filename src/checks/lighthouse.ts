@@ -63,6 +63,7 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
             port: chrome.port,
             output: "json",
             logLevel: "error",
+            maxWaitForLoad: 20_000,
             onlyCategories: [
               "performance",
               "accessibility",
@@ -99,6 +100,15 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
       if (skipped.length) {
         console.log(`⚠ Lighthouse skipped ${skipped.length} page(s)`);
       }
+      if (!pages.length && skipped.length) {
+        return {
+          name: this.name,
+          status: "SKIPPED",
+          message: `Lighthouse skipped all ${skipped.length} page(s)`,
+          duration: performance.now() - started,
+          data: [],
+        };
+      }
       const overall = pages.length
         ? Math.round(
             pages.reduce((sum, page) => sum + page.performance, 0) /
@@ -121,7 +131,11 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
         duration: performance.now() - started,
       };
     } finally {
-      await chrome?.kill();
+      try {
+        await chrome?.kill();
+      } catch {
+        // Cleanup should never hide the Lighthouse result.
+      }
     }
   }
 }

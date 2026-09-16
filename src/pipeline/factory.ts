@@ -2,6 +2,7 @@ import type { DetectedFramework } from "../framework.js";
 import { AngularPipeline } from "./angular.pipeline.js";
 import { AstroPipeline } from "./astro.pipeline.js";
 import { GenericPipeline } from "./generic.pipeline.js";
+import { ExpressPipeline } from "./express.pipeline.js";
 import { FlutterPipeline } from "./flutter.pipeline.js";
 import { HtmlPipeline } from "./html.pipeline.js";
 import { LaravelPipeline } from "./laravel.pipeline.js";
@@ -38,6 +39,7 @@ const PIPELINES: Readonly<Record<string, PipelineConstructor>> = {
   Bootstrap: HtmlPipeline,
   Tailwind: HtmlPipeline,
   Bulma: HtmlPipeline,
+  Express: ExpressPipeline,
 };
 
 export class PipelineFactory {

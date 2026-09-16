@@ -1,11 +1,24 @@
-export type CheckStatus = "PASS" | "FAIL" | "WARNING" | "SKIPPED";
+import type { IssueCategory, QAIssue } from "./issue.js";
+
+export type CheckStatus = "PASS" | "FAIL" | "WARNING" | "SKIPPED" | "ERROR";
 
 export interface CheckResult<T = unknown> {
   name: string;
+  category?: IssueCategory;
   status: CheckStatus;
   score?: number;
   message?: string;
   duration: number;
+  startedAt?: string;
+  finishedAt?: string;
+  issues?: QAIssue[];
+  error?: {
+    name: string;
+    message: string;
+    code?: string;
+    stack?: string;
+  };
+  metadata?: Record<string, unknown>;
   data?: T;
 }
 

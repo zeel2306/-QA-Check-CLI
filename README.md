@@ -130,6 +130,22 @@ By default, QA Check compares the current run with the previous
 qa-check . --no-baseline
 ```
 
+Use a QA profile
+
+```bash
+qa-check . --profile report
+qa-check . --profile ci
+qa-check . --profile strict
+```
+
+Profiles:
+
+```text
+report = generate reports and never fail because of QA results
+ci     = fail on FAIL or ERROR checks
+strict = fail on WARNING/FAIL/ERROR checks and require 80/100
+```
+
 ---
 
 # 📄 Generated Report
@@ -171,7 +187,7 @@ downloadable workflow artifacts.
 Default command:
 
 ```bash
-npx qa-check-cli . --ci --pdf --fail-on error --output reports
+npx qa-check-cli . --ci --pdf --profile ci --output reports
 ```
 
 Uploaded artifacts:
@@ -185,6 +201,26 @@ reports/screenshots/
 
 ## CI Failure Rules
 
+Recommended profiles:
+
+```bash
+--profile report
+```
+
+Use this when QA Check is only for testing and report generation.
+
+```bash
+--profile ci
+```
+
+Use this for normal CI. It fails on `FAIL` or `ERROR` checks.
+
+```bash
+--profile strict
+```
+
+Use this for stricter teams. It fails on `WARNING`, `FAIL`, `ERROR`, or score below `80/100`.
+
 Fail only when a check has `FAIL` status:
 
 ```bash
@@ -197,19 +233,35 @@ Fail when a check has `WARNING` or `FAIL` status:
 --fail-on warning
 ```
 
+Generate reports but never fail CI because of QA check status:
+
+```bash
+--fail-on none
+```
+
+Fail only when the overall score is below a minimum threshold:
+
+```bash
+--min-score 80
+```
+
 ## Configuration
 
 The workflow supports manual configuration through workflow dispatch:
 
 - Node version
-- Fail threshold: `error` or `warning`
+- QA profile: `report`, `ci`, or `strict`
+- Fail threshold: `error`, `warning`, or `none`
+- Minimum score
 - Report output folder
 
 Default values:
 
 ```yaml
 node_version: 20
-fail_on: error
+profile: ci
+fail_on: profile
+min_score: profile
 report_dir: reports
 ```
 
@@ -219,12 +271,36 @@ For push and pull request runs, edit the workflow `env` defaults in
 ```yaml
 env:
   NODE_VERSION: 20
-  FAIL_ON: error
+  QA_PROFILE: ci
+  FAIL_ON: profile
+  MIN_SCORE: profile
   REPORT_DIR: reports
 ```
 
+Use `QA_PROFILE: report` when QA Check should only generate reports.
+Use `QA_PROFILE: ci` for normal CI failure behavior.
+Use `QA_PROFILE: strict` for stricter PR gates.
 Use `FAIL_ON: warning` when warnings should block a pull request.
 Use `FAIL_ON: error` when only failed checks should block a pull request.
+Use `FAIL_ON: none` when QA Check should only generate reports.
+Use `MIN_SCORE: 80` when the workflow should fail below `80/100`.
+
+## Project Config File
+
+You can also configure QA Check from `qa-check.config.json`:
+
+```json
+{
+  "profile": "report",
+  "failOn": "none",
+  "minScore": 0,
+  "output": "reports",
+  "pdf": true,
+  "baselineComparison": true
+}
+```
+
+CLI flags override values from the config file.
 
 ## Example 1: Run on Every Push
 

@@ -129,7 +129,9 @@ export function getIssueSuggestions(result: CheckResult): IssueSuggestion[] {
   }
 
   const fallbackCode = fallbackCodeForCheck(result.name);
-  const codes = collectCodesFromData(result.data, fallbackCode);
+  const codes = result.issues?.length
+    ? result.issues.map((issue) => normalizeCode(issue.code))
+    : collectCodesFromData(result.data, fallbackCode);
   const uniqueCodes = [...new Set(codes.length ? codes : [fallbackCode])];
 
   return uniqueCodes.map((code) => suggestions[code] ?? fallbackSuggestion(code, result.name));

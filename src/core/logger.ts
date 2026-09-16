@@ -20,12 +20,16 @@ export const logger = {
 },
   result(result: CheckResult): void {
     const icon =
-      result.status === "PASS" ? "✔" : result.status === "FAIL" ? "✖" : "⚠";
+      result.status === "PASS"
+        ? "✔"
+        : result.status === "FAIL" || result.status === "ERROR"
+          ? "✖"
+          : "⚠";
     const text = `${icon} ${result.name}: ${result.status}${result.score === undefined ? "" : ` (${result.score})`}`;
     const color =
       result.status === "PASS"
         ? chalk.green
-        : result.status === "FAIL"
+        : result.status === "FAIL" || result.status === "ERROR"
           ? chalk.red
           : chalk.yellow;
     console.log(color(text));

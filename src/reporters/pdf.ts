@@ -34,6 +34,8 @@ function statusColor(status: CheckStatus): string {
       return COLORS.fail;
     case "SKIPPED":
       return COLORS.skipped;
+    case "ERROR":
+      return COLORS.fail;
   }
 }
 
@@ -60,6 +62,7 @@ function checkScore(result: CheckResult): string {
   if (result.status === "PASS") return "100";
   if (result.status === "WARNING") return "60";
   if (result.status === "FAIL") return "0";
+  if (result.status === "ERROR") return "0";
   return "-";
 }
 
@@ -199,6 +202,7 @@ function renderSummaryPage(doc: PDFKit.PDFDocument, report: AuditReport): void {
     pass: report.results.filter((result) => result.status === "PASS").length,
     warning: report.results.filter((result) => result.status === "WARNING").length,
     fail: report.results.filter((result) => result.status === "FAIL").length,
+    error: report.results.filter((result) => result.status === "ERROR").length,
     skipped: report.results.filter((result) => result.status === "SKIPPED").length,
   };
 
@@ -206,7 +210,8 @@ function renderSummaryPage(doc: PDFKit.PDFDocument, report: AuditReport): void {
   drawSummaryCard(doc, "PASS", counts.pass, PAGE.margin, y, COLORS.pass);
   drawSummaryCard(doc, "WARNING", counts.warning, PAGE.margin + 130, y, COLORS.warning);
   drawSummaryCard(doc, "FAIL", counts.fail, PAGE.margin + 260, y, COLORS.fail);
-  drawSummaryCard(doc, "SKIPPED", counts.skipped, PAGE.margin + 390, y, COLORS.skipped);
+  drawSummaryCard(doc, "ERROR", counts.error, PAGE.margin + 390, y, COLORS.fail);
+  drawSummaryCard(doc, "SKIPPED", counts.skipped, PAGE.margin, y + 104, COLORS.skipped);
 }
 
 function renderCheckResultsPage(doc: PDFKit.PDFDocument, report: AuditReport): void {
@@ -251,7 +256,7 @@ function renderIssuesPages(doc: PDFKit.PDFDocument, report: AuditReport): void {
   addSectionTitle(doc, "Issues and Suggested Fixes");
 
   const issueResults = report.results.filter(
-    (result) => result.status === "FAIL" || result.status === "WARNING",
+    (result) => result.status === "FAIL" || result.status === "WARNING" || result.status === "ERROR",
   );
 
   if (!issueResults.length) {

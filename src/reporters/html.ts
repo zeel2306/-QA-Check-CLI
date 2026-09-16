@@ -50,6 +50,8 @@ function getStatusColor(status: CheckStatus): string {
       return "#ef4444";
     case "SKIPPED":
       return "#94a3b8";
+    case "ERROR":
+      return "#f43f5e";
   }
 }
 
@@ -63,6 +65,8 @@ function statusIcon(status: CheckStatus): string {
       return "×";
     case "SKIPPED":
       return "○";
+    case "ERROR":
+      return "×";
   }
 }
 
@@ -99,6 +103,7 @@ function getAnalytics(report: AuditReport) {
   const warning = report.results.filter((result) => result.status === "WARNING").length;
   const fail = report.results.filter((result) => result.status === "FAIL").length;
   const skipped = report.results.filter((result) => result.status === "SKIPPED").length;
+  const error = report.results.filter((result) => result.status === "ERROR").length;
   const scored = report.results.filter((result): result is CheckResult & { score: number } => typeof result.score === "number");
   const averageScore = scored.length
     ? Math.round(scored.reduce((total, result) => total + clampScore(result.score), 0) / scored.length)
@@ -106,7 +111,7 @@ function getAnalytics(report: AuditReport) {
   const totalIssues = report.results.reduce((total, result) => total + getIssueCount(result), 0);
   const performance = report.results.find((result) => result.name === "Performance");
 
-  return { pass, warning, fail, skipped, averageScore, totalIssues, performanceScore: performance?.score ?? 0 };
+  return { pass, warning, fail, skipped, error, averageScore, totalIssues, performanceScore: performance?.score ?? 0 };
 }
 
 function getIssueGroupKey(item: unknown, fallback: string): string {
@@ -303,6 +308,7 @@ function renderAnalytics(report: AuditReport): string {
     ["PASS checks", analytics.pass, "Completed successfully", "pass"],
     ["WARNING checks", analytics.warning, "Need review", "warning"],
     ["FAIL checks", analytics.fail, "Require action", "fail"],
+    ["ERROR checks", analytics.error, "Execution errors", "fail"],
     ["Skipped checks", analytics.skipped || report.checksSkipped.length, "Not executed", "skipped"],
     ["Average Score", `${analytics.averageScore}/100`, "Across scored checks", "score"],
     ["Total Issues", analytics.totalIssues, "Across all checks", "issues"],
@@ -412,7 +418,7 @@ function renderToolbar(): string {
         <input id="checkSearch" type="search" placeholder="Search by check name" autocomplete="off">
       </label>
       <div class="filters" aria-label="Status filters">
-        ${["ALL", "PASS", "WARNING", "FAIL", "SKIPPED"].map((status) => `<button type="button" class="filter-button ${status === "ALL" ? "active" : ""}" data-filter="${status}">${status}</button>`).join("")}
+        ${["ALL", "PASS", "WARNING", "FAIL", "ERROR", "SKIPPED"].map((status) => `<button type="button" class="filter-button ${status === "ALL" ? "active" : ""}" data-filter="${status}">${status}</button>`).join("")}
       </div>
       <div class="actions">
         <button type="button" id="expandAll">Expand All</button>
@@ -479,7 +485,7 @@ function renderListPanel(title: string, eyebrow: string, items: string[]): strin
 
 function renderRecommendations(report: AuditReport): string {
   const items = report.results
-    .filter((result) => result.status === "FAIL" || result.status === "WARNING")
+    .filter((result) => result.status === "FAIL" || result.status === "WARNING" || result.status === "ERROR")
     .map((result) => `<li><strong>${escape(result.name)}</strong><span>${escape(getIssueSuggestions(result)[0]?.shortFix ?? result.message ?? "Review reported findings.")}</span></li>`)
     .join("");
 
@@ -534,6 +540,7 @@ function chartPayload(report: AuditReport) {
       pass: analytics.pass,
       warning: analytics.warning,
       fail: analytics.fail,
+      error: analytics.error,
       skipped: analytics.skipped,
     },
     issueDistribution: report.results.map((result) => ({
@@ -651,7 +658,7 @@ function renderScripts(report: AuditReport): string {
           });
           new Chart(document.getElementById("checkDistributionChart"), {
             type: "doughnut",
-            data: { labels: ["PASS", "WARNING", "FAIL", "SKIPPED"], datasets: [{ data: [data.checkDistribution.pass, data.checkDistribution.warning, data.checkDistribution.fail, data.checkDistribution.skipped], backgroundColor: ["#22c55e", "#f59e0b", "#ef4444", "#94a3b8"], borderWidth: 0 }] },
+            data: { labels: ["PASS", "WARNING", "FAIL", "ERROR", "SKIPPED"], datasets: [{ data: [data.checkDistribution.pass, data.checkDistribution.warning, data.checkDistribution.fail, data.checkDistribution.error, data.checkDistribution.skipped], backgroundColor: ["#22c55e", "#f59e0b", "#ef4444", "#f43f5e", "#94a3b8"], borderWidth: 0 }] },
             options: { responsive: true }
           });
           new Chart(document.getElementById("issueDistributionChart"), {
@@ -767,7 +774,7 @@ function renderStyles(): string {
 
       /* Analytics */
       .analytics-grid, .charts-grid, .checks-grid, .gallery, .two-column { display: grid; gap: 18px; }
-      .analytics-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: 24px; }
+      .analytics-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-top: 24px; }
       .analytics-card, .panel, .check-card, .charts-grid article {
         border: 1px solid var(--border);
         border-radius: var(--radius);
@@ -892,6 +899,7 @@ function renderStyles(): string {
       .check-card.pass { --status-color: var(--success); }
       .check-card.warning { --status-color: var(--warning); }
       .check-card.fail { --status-color: var(--danger); }
+      .check-card.error { --status-color: #f43f5e; }
       .check-card.skipped { --status-color: var(--text-muted); }
       .card-header, .check-title, .metric-row, .summary-block, .progress { display: flex; gap: 12px; }
       .card-header { align-items: flex-start; justify-content: space-between; }

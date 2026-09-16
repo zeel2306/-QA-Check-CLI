@@ -10,7 +10,7 @@ export class BrokenImagesCheck extends BrowserCheck {
       try { const response = await fetch(image.url, { method: "HEAD", signal: AbortSignal.timeout(10_000) }); return { ...image, status: response.status, bytes: Number(response.headers.get("content-length") ?? 0) }; }
       catch { return { ...image, status: 0 }; }
     });
-    const issues = checked.filter((image) => !image.alt || !image.status || image.status >= 400 || (image.bytes ?? 0) > 1_000_000);
+    const issues = checked.filter((image) => !image.status || image.status >= 400 || (image.bytes ?? 0) > 1_000_000);
     return { status: issues.length ? "FAIL" as const : "PASS" as const, message: `${issues.length} image issues`, data: issues };
   }
 }
