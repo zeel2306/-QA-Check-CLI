@@ -10,6 +10,34 @@ Detect the framework → Select the correct QA pipeline → Generate a beautiful
 
 ---
 
+## 📌 Project Status
+
+QA Check CLI is actively being developed as a framework-aware testing and QA
+reporting tool for modern web projects.
+
+The current stable npm release is `1.0.7`. Version `1.1.0` has been published
+and may appear as `Validating` on npm until npm finishes its automated review.
+Once review completes, `1.1.0` will become available as the latest release.
+
+Version `1.1.0` focuses on turning QA Check CLI into a complete reporting
+workflow:
+
+- Professional dark HTML dashboard
+- JSON and PDF report generation
+- Screenshot gallery
+- Fix suggestions for common issues
+- Baseline comparison
+- GitHub Actions support
+- CI profiles for report-only, normal CI, and strict CI modes
+
+If you only want reports and do not want QA checks to block CI, use:
+
+```bash
+qa-check . --profile report
+```
+
+---
+
 ## ✨ Features
 
 - 🔍 Automatic framework detection
@@ -25,8 +53,15 @@ Detect the framework → Select the correct QA pipeline → Generate a beautiful
 - 🖼 Broken image detection
 - 🐞 Console error detection
 - 🌍 Network request validation
-- 📄 Beautiful HTML report
+- 📄 Beautiful HTML dashboard report
 - 📊 JSON report
+- 🧾 PDF report
+- 💡 Practical fix suggestions
+- 📈 Baseline comparison
+- 🔎 Search and filtering in the report
+- 📊 Dashboard charts and analytics
+- 🧪 CI profiles: report, ci, strict
+- ☁ GitHub Actions workflow
 - 🎯 Overall Quality Score
 - 📸 Responsive screenshots
 
@@ -146,6 +181,10 @@ ci     = fail on FAIL or ERROR checks
 strict = fail on WARNING/FAIL/ERROR checks and require 80/100
 ```
 
+Use `report` when QA Check is used as a testing and documentation tool.
+Use `ci` when failed checks should block CI.
+Use `strict` when warnings and low score should also block CI.
+
 ---
 
 # 📄 Generated Report
@@ -157,6 +196,7 @@ reports/
 
 ├── index.html
 ├── report.json
+├── report.pdf
 └── screenshots/
 ```
 
@@ -487,23 +527,32 @@ npm update -g qa-check-cli
 - ✅ Framework Detection
 - ✅ Framework Pipelines
 - ✅ HTML Dashboard
+- ✅ JSON Report
+- ✅ PDF Report
+- ✅ Screenshot Gallery
 - ✅ Lighthouse
 - ✅ Accessibility
 - ✅ SEO
 - ✅ Performance
 - ✅ Responsive Testing
+- ✅ Fix Suggestions
+- ✅ Baseline Comparison
+- ✅ Charts & Analytics
+- ✅ Interactive Search
+- ✅ Issue Filtering
+- ✅ Dark Theme
+- ✅ GitHub Actions
+- ✅ CI/CD Profiles
 
 ### Upcoming
 
 - 📈 Historical Reports
-- 📊 Charts & Analytics
-- 🔍 Interactive Search
-- 🎯 Issue Filtering
-- 📄 PDF Export
 - 📑 Excel Export
-- 🌙 Dark / Light Theme
-- ☁ CI/CD Integration
-- 🤖 GitHub Action
+- 💬 GitHub Pull Request comments
+- 🧭 Route include / exclude controls
+- 🧪 More framework-specific checks
+- 🧠 More intelligent fix suggestions
+- 📦 Release automation
 
 ---
 
