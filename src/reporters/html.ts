@@ -394,6 +394,59 @@ function renderBaseline(report: AuditReport): string {
   `;
 }
 
+function renderHistory(report: AuditReport): string {
+  if (!report.history?.runs.length) return "";
+
+  const history = report.history;
+  const current = history.runs.at(-1);
+  const previous = history.runs.at(-2);
+  const recentRuns = history.runs.slice(-8);
+
+  return `
+    <section class="section baseline-panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">History</p>
+          <h2>Quality trend</h2>
+        </div>
+        <span>${escape(`${history.runs.length} tracked run${history.runs.length === 1 ? "" : "s"}`)}</span>
+      </div>
+      <div class="baseline-summary">
+        <article>
+          <span>Latest Score</span>
+          <strong>${escape(current ? `${current.overallScore}/100` : "N/A")}</strong>
+        </article>
+        <article>
+          <span>Previous Score</span>
+          <strong>${escape(previous ? `${previous.overallScore}/100` : "New")}</strong>
+        </article>
+        <article class="${(history.scoreDelta ?? 0) >= 0 ? "positive" : "negative"}">
+          <span>Score Change</span>
+          <strong>${escape(formatDelta(history.scoreDelta))}</strong>
+        </article>
+        <article class="${(history.issueDelta ?? 0) <= 0 ? "positive" : "negative"}">
+          <span>Issue Change</span>
+          <strong>${escape(formatDelta(history.issueDelta, true))}</strong>
+        </article>
+      </div>
+      <div class="baseline-table">
+        ${recentRuns
+          .map(
+            (run) => `
+              <div>
+                <strong>${escape(formatDate(run.generatedAt))}</strong>
+                <span>Score ${escape(`${run.overallScore}/100`)}</span>
+                <span>Issues ${escape(run.totalIssues)}</span>
+                <span>Fail ${escape(run.counts.fail + run.counts.error)} · Warning ${escape(run.counts.warning)}</span>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderCharts(report: AuditReport): string {
   return `
     <section class="section">
@@ -1024,6 +1077,7 @@ function renderHtml(report: AuditReport): string {
       ${renderHero(report)}
       ${renderAnalytics(report)}
       ${renderBaseline(report)}
+      ${renderHistory(report)}
       ${renderToolbar()}
       ${renderCharts(report)}
       <section class="section two-column">

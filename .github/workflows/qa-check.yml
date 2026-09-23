@@ -39,6 +39,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 env:
   NODE_VERSION: ${{ github.event.inputs.node_version || '20' }}
@@ -192,6 +193,71 @@ jobs:
           fs.appendFileSync(summaryPath, `${lines.join("\n")}\n`);
           NODE
 
+      - name: Comment on pull request
+        if: always() && github.event_name == 'pull_request' && steps.reports.outputs.exists == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+            const marker = "<!-- qa-check-cli-report -->";
+            const reportPath = path.join(process.env.REPORT_DIR || "reports", "report.json");
+
+            if (!fs.existsSync(reportPath)) {
+              return;
+            }
+
+            const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+            const counts = { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, SKIPPED: 0 };
+
+            for (const result of report.results || []) {
+              counts[result.status] = (counts[result.status] || 0) + 1;
+            }
+
+            const body = [
+              marker,
+              "## QA Check Report",
+              "",
+              `**Score:** ${report.overallScore ?? 0}/100`,
+              `**Framework:** ${report.framework || "Unknown"}`,
+              `**Pipeline:** ${report.pipeline || "Unknown"}`,
+              "",
+              "| Status | Count |",
+              "| --- | ---: |",
+              `| PASS | ${counts.PASS} |`,
+              `| WARNING | ${counts.WARNING} |`,
+              `| FAIL | ${counts.FAIL + counts.ERROR} |`,
+              `| SKIPPED | ${counts.SKIPPED} |`,
+              "",
+              "Download the uploaded `qa-check-reports` artifact to view HTML, JSON, PDF, and screenshots.",
+            ].join("\n");
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const previous = comments.data.find((comment) => comment.body?.includes(marker));
+
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: previous.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
+
       - name: Upload QA Reports
         if: always() && steps.reports.outputs.exists == 'true'
         uses: actions/upload-artifact@v4
@@ -200,6 +266,7 @@ jobs:
           path: |
             ${{ env.REPORT_DIR }}/index.html
             ${{ env.REPORT_DIR }}/report.json
+            ${{ env.REPORT_DIR }}/report.md
             ${{ env.REPORT_DIR }}/report.pdf
             ${{ env.REPORT_DIR }}/screenshots/**
           if-no-files-found: warn

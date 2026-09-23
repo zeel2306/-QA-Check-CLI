@@ -46,6 +46,32 @@ export interface AuditReport {
   overallScore: number;
   results: CheckResult[];
   baseline?: BaselineComparison;
+  history?: HistoryTrend;
+}
+
+export interface HistorySnapshot {
+  version: number;
+  projectPath: string;
+  framework: string;
+  pipeline: string;
+  generatedAt: string;
+  duration: number;
+  overallScore: number;
+  totalIssues: number;
+  counts: {
+    pass: number;
+    warning: number;
+    fail: number;
+    error: number;
+    skipped: number;
+  };
+}
+
+export interface HistoryTrend {
+  historyDir?: string;
+  runs: HistorySnapshot[];
+  scoreDelta?: number;
+  issueDelta?: number;
 }
 
 export interface BaselineComparison {

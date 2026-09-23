@@ -15,9 +15,7 @@ Detect the framework → Select the correct QA pipeline → Generate a beautiful
 QA Check CLI is actively being developed as a framework-aware testing and QA
 reporting tool for modern web projects.
 
-The current stable npm release is `1.0.7`. Version `1.1.0` has been published
-and may appear as `Validating` on npm until npm finishes its automated review.
-Once review completes, `1.1.0` will become available as the latest release.
+The current stable npm release is `1.1.0`.
 
 Version `1.1.0` focuses on turning QA Check CLI into a complete reporting
 workflow:
@@ -55,15 +53,35 @@ qa-check . --profile report
 - 🌍 Network request validation
 - 📄 Beautiful HTML dashboard report
 - 📊 JSON report
+- 📝 Markdown summary report
 - 🧾 PDF report
 - 💡 Practical fix suggestions
 - 📈 Baseline comparison
+- 🧭 Route include / exclude controls
 - 🔎 Search and filtering in the report
 - 📊 Dashboard charts and analytics
+- 🛠 Project setup with `qa-check init`
 - 🧪 CI profiles: report, ci, strict
 - ☁ GitHub Actions workflow
+- 💬 GitHub Pull Request summary comments
 - 🎯 Overall Quality Score
 - 📸 Responsive screenshots
+
+---
+
+## 💖 Support This Project
+
+QA Check CLI is an open-source project built and maintained in public.
+
+If this CLI saves you time, helps your team catch issues earlier, or improves
+your CI/CD workflow, you can support development here:
+
+```text
+https://github.com/sponsors/zeel2306
+```
+
+Your support helps keep the project active and fund future work like better
+framework checks, PR comments, historical reports, and developer tooling.
 
 ---
 
@@ -134,6 +152,22 @@ npm config get prefix
 
 # 🚀 Usage
 
+Show command help
+
+```bash
+qa-check --help
+```
+
+When you run a normal local scan, QA Check also prints a short list of useful
+next commands, such as report-only mode, CI mode, strict mode, route-only runs,
+and project setup.
+
+Create a starter config and GitHub Actions workflow
+
+```bash
+qa-check init
+```
+
 Audit current project
 
 ```bash
@@ -185,6 +219,28 @@ Use `report` when QA Check is used as a testing and documentation tool.
 Use `ci` when failed checks should block CI.
 Use `strict` when warnings and low score should also block CI.
 
+Control which routes are audited
+
+```bash
+qa-check . --route / --route /about
+qa-check . --ignore-route /admin --ignore-route /api
+qa-check . --max-routes 20
+```
+
+`--route` and `--ignore-route` can be repeated or passed as comma-separated
+lists. Route controls apply to browser checks, screenshots, and Lighthouse.
+
+Track report history
+
+```bash
+qa-check . --history
+qa-check . --history-limit 50
+qa-check . --no-history
+```
+
+History is enabled by default. QA Check stores compact snapshots in
+`reports/history/` and shows recent score and issue trends in the HTML report.
+
 ---
 
 # 📄 Generated Report
@@ -196,7 +252,9 @@ reports/
 
 ├── index.html
 ├── report.json
+├── report.md
 ├── report.pdf
+├── history/
 └── screenshots/
 ```
 
@@ -224,6 +282,9 @@ It uses Node.js 20, installs project dependencies, runs QA Check in CI mode,
 generates HTML, JSON, PDF, and screenshot reports, then uploads them as
 downloadable workflow artifacts.
 
+On pull requests, the workflow also posts or updates a QA Check summary comment
+with the overall score and PASS/WARNING/FAIL/SKIPPED counts.
+
 Default command:
 
 ```bash
@@ -235,6 +296,7 @@ Uploaded artifacts:
 ```text
 reports/index.html
 reports/report.json
+reports/report.md
 reports/report.pdf
 reports/screenshots/
 ```
@@ -335,8 +397,14 @@ You can also configure QA Check from `qa-check.config.json`:
   "failOn": "none",
   "minScore": 0,
   "output": "reports",
+  "markdown": true,
   "pdf": true,
-  "baselineComparison": true
+  "baselineComparison": true,
+  "history": true,
+  "historyLimit": 30,
+  "includeRoutes": [],
+  "ignoreRoutes": ["/api", "/admin"],
+  "maxRoutes": 50
 }
 ```
 
@@ -528,6 +596,7 @@ npm update -g qa-check-cli
 - ✅ Framework Pipelines
 - ✅ HTML Dashboard
 - ✅ JSON Report
+- ✅ Markdown Report
 - ✅ PDF Report
 - ✅ Screenshot Gallery
 - ✅ Lighthouse
@@ -537,19 +606,20 @@ npm update -g qa-check-cli
 - ✅ Responsive Testing
 - ✅ Fix Suggestions
 - ✅ Baseline Comparison
+- ✅ Historical Reports
 - ✅ Charts & Analytics
 - ✅ Interactive Search
 - ✅ Issue Filtering
 - ✅ Dark Theme
+- ✅ Route Controls
+- ✅ Project Init Command
 - ✅ GitHub Actions
+- ✅ Pull Request Comments
 - ✅ CI/CD Profiles
 
 ### Upcoming
 
-- 📈 Historical Reports
 - 📑 Excel Export
-- 💬 GitHub Pull Request comments
-- 🧭 Route include / exclude controls
 - 🧪 More framework-specific checks
 - 🧠 More intelligent fix suggestions
 - 📦 Release automation

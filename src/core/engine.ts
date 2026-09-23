@@ -11,16 +11,23 @@ import { createCheckRegistry } from "../checks/registry.js";
 import type { QAContext } from "./context.js";
 import { executeCheck, toQACheck } from "./executor.js";
 import type { QaProfile } from "./profile.js";
+import { createHistoryTrend, readHistory, writeHistorySnapshot } from "../history.js";
 
 export interface QaEngineOptions {
   profile?: QaProfile;
   ci?: boolean;
   html?: boolean;
   json?: boolean;
+  markdown?: boolean;
   pdf?: boolean;
   output?: string;
   failOn?: "warning" | "error" | "none";
   minScore?: number;
+  includeRoutes?: string[];
+  ignoreRoutes?: string[];
+  maxRoutes?: number;
+  history?: boolean;
+  historyLimit?: number;
   baseline?: string;
   baselineComparison?: boolean;
 }
@@ -49,6 +56,7 @@ export async function runQaEngine(
   projectPath,
   options.output ?? "reports",
 );
+  const historyDir = path.join(reportDir, "history");
   const baselinePath =
     options.baseline ??
     (options.baselineComparison === false
@@ -57,7 +65,7 @@ export async function runQaEngine(
   const baselineReport = baselinePath
     ? await readBaselineReport(path.resolve(projectPath, baselinePath))
     : undefined;
-  const runtime = new PipelineRuntime(projectPath, reportDir);
+  const runtime = new PipelineRuntime(projectPath, reportDir, options);
   const pipeline = PipelineFactory.create(detection, runtime);
   const results: CheckResult[] = [];
 
@@ -130,19 +138,28 @@ export async function runQaEngine(
     results,
   };
   report.baseline = compareWithBaseline(report, baselineReport, baselinePath);
+  const previousHistory = options.history === false ? [] : await readHistory(historyDir);
+  if (options.history !== false) {
+    report.history = createHistoryTrend(report, previousHistory, historyDir);
+  }
   let outputs = {
   html: "",
   json: "",
   pdf: "",
+  markdown: "",
 };
 
 if (options.html !== false || options.json !== false || options.pdf !== false) {
   outputs = await generateReports(report, reportDir, {
     html: options.html,
     json: options.json,
+    markdown: options.markdown,
     pdf: options.pdf,
   });
 }
+  if (options.history !== false) {
+    await writeHistorySnapshot(report, historyDir, options.historyLimit ?? 30);
+  }
   logger.footer(overallScore, outputs.html, report.baseline);
   return report;
 }

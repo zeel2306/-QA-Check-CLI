@@ -1,6 +1,7 @@
 import type { AuditReport, CheckResult } from "../types/result.js";
 import { writeHtmlReport } from "../reporters/html.js";
 import { writeJsonReport } from "../reporters/json.js";
+import { writeMarkdownReport } from "../reporters/markdown.js";
 import { writePdfReport } from "../reporters/pdf.js";
 
 const WEIGHTED = new Set(["SEO", "Lighthouse", "Accessibility", "Performance"]);
@@ -30,16 +31,18 @@ export function calculateOverallScore(results: CheckResult[]): number {
 export interface ReportOptions {
   html?: boolean;
   json?: boolean;
+  markdown?: boolean;
   pdf?: boolean;
 }
 export async function generateReports(
   report: AuditReport,
   reportDir: string,
   options: ReportOptions = {},
-): Promise<{ html: string; json: string; pdf: string }> {
+): Promise<{ html: string; json: string; markdown: string; pdf: string }> {
 
   let html = "";
   let json = "";
+  let markdown = "";
   let pdf = "";
 
   if (options.html !== false) {
@@ -48,6 +51,10 @@ export async function generateReports(
 
   if (options.json !== false) {
     json = await writeJsonReport(report, reportDir);
+  }
+
+  if (options.markdown !== false) {
+    markdown = await writeMarkdownReport(report, reportDir);
   }
 
   if (options.pdf !== false) {
@@ -61,6 +68,7 @@ export async function generateReports(
   return {
     html,
     json,
+    markdown,
     pdf,
   };
 }

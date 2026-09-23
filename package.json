@@ -29,6 +29,10 @@
   ],
   "author": "Zeel Patel",
   "license": "MIT",
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/zeel2306"
+  },
   "dependencies": {
     "@types/pdfkit": "^0.17.6",
     "axe-core": "^4.12.1",
