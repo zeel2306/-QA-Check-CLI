@@ -15,18 +15,22 @@ Detect the framework → Select the correct QA pipeline → Generate a beautiful
 QA Check CLI is actively being developed as a framework-aware testing and QA
 reporting tool for modern web projects.
 
-The current stable npm release is `1.1.0`.
+The current stable npm release is `1.1.1`.
 
-Version `1.1.0` focuses on turning QA Check CLI into a complete reporting
+Version `1.1.1` focuses on turning QA Check CLI into a complete reporting
 workflow:
 
 - Professional dark HTML dashboard
-- JSON and PDF report generation
+- HTML, JSON, Markdown, and PDF report generation
 - Screenshot gallery
 - Fix suggestions for common issues
 - Baseline comparison
+- Historical quality tracking
+- Route include / exclude controls
 - GitHub Actions support
+- Pull request summary comments
 - CI profiles for report-only, normal CI, and strict CI modes
+- GitHub Sponsors support
 
 If you only want reports and do not want QA checks to block CI, use:
 
@@ -66,6 +70,35 @@ qa-check . --profile report
 - 💬 GitHub Pull Request summary comments
 - 🎯 Overall Quality Score
 - 📸 Responsive screenshots
+
+---
+
+## ✅ What QA Check CLI Does
+
+QA Check CLI helps developers and teams run practical website quality checks
+from the terminal and CI/CD pipelines.
+
+| Area | What it checks |
+| --- | --- |
+| Code Quality | Build, ESLint, TypeScript |
+| SEO | Title, description, canonical, Open Graph, Twitter card, structured data |
+| Accessibility | axe-core violations, landmarks, contrast, buttons, image alt text |
+| Performance | Navigation timing, slow pages, Lighthouse performance signals |
+| Responsive UI | Viewport overflow, clipped text, oversized images, screenshots |
+| Network | Broken links, broken images, failed requests, slow requests, HTTP errors |
+| Console | Browser console errors and JavaScript exceptions |
+| Reports | HTML dashboard, JSON, Markdown, PDF, screenshots, history |
+| CI/CD | GitHub Actions, PR comments, artifacts, configurable failure rules |
+
+## 🆕 Latest Highlights
+
+- `qa-check init` creates config and GitHub Actions workflow
+- `--profile report`, `--profile ci`, and `--profile strict`
+- `--route`, `--ignore-route`, and `--max-routes`
+- `reports/history/` stores compact historical run snapshots
+- `report.md` gives a shareable Markdown summary
+- Pull requests can receive automatic QA Check summary comments
+- Funding metadata and GitHub Sponsors support are included
 
 ---
 
