@@ -9,6 +9,7 @@ export class NextPipeline extends BasePipeline {
       this.build(),
       this.eslint(),
       this.typeScript(),
+      this.codeQuality(),
       this.routes(),
       this.seo(),
       this.lighthouse(),

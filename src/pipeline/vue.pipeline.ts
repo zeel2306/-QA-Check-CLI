@@ -8,6 +8,7 @@ export class VuePipeline extends BasePipeline {
     return [
       this.build(),
       this.typeScript("Type Check"),
+      this.codeQuality(),
       this.responsive(),
       this.accessibility(),
       this.lighthouse(),

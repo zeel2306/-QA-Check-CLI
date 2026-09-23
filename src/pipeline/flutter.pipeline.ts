@@ -17,6 +17,7 @@ export class FlutterPipeline extends BasePipeline {
       flutterDoctor(),
       pubspecValidation(),
       dartAnalyze(),
+      this.codeQuality(),
       flutterTest(),
       dependencyValidation(),
       assetValidation(),

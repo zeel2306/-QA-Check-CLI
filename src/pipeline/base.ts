@@ -2,6 +2,7 @@ import { runBuild } from "../build.js";
 import { AccessibilityCheck } from "../checks/accessibility.js";
 import { BrokenImagesCheck } from "../checks/brokenImages.js";
 import { BrokenLinksCheck } from "../checks/brokenLinks.js";
+import { CodeQualityInsightsCheck } from "../checks/codeQuality.js";
 import { CommandCheck } from "../checks/command.js";
 import { ConsoleErrorsCheck } from "../checks/consoleErrors.js";
 import { NetworkCheck } from "../checks/network.js";
@@ -35,6 +36,10 @@ export abstract class BasePipeline implements Pipeline {
 
   protected typeScript(name = "TypeScript"): Check {
     return new CommandCheck(name, runTypeScript);
+  }
+
+  protected codeQuality(): Check {
+    return new CodeQualityInsightsCheck();
   }
 
   protected routes(): Check {

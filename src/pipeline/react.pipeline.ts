@@ -9,6 +9,7 @@ export class ReactPipeline extends BasePipeline {
       this.build(),
       this.eslint(),
       this.typeScript(),
+      this.codeQuality(),
       this.responsive(),
       this.accessibility(),
       this.lighthouse(),

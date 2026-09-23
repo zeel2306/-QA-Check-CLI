@@ -15,15 +15,16 @@ Detect the framework → Select the correct QA pipeline → Generate a beautiful
 QA Check CLI is actively being developed as a framework-aware testing and QA
 reporting tool for modern web projects.
 
-The current stable npm release is `1.1.1`.
+The current stable npm release is `1.1.3`.
 
-Version `1.1.1` focuses on turning QA Check CLI into a complete reporting
+Version `1.1.3` focuses on turning QA Check CLI into a complete reporting
 workflow:
 
 - Professional dark HTML dashboard
 - HTML, JSON, Markdown, and PDF report generation
 - Screenshot gallery
 - Fix suggestions for common issues
+- Code quality insights for maintainability, repeated code, debug statements, and component structure
 - Baseline comparison
 - Historical quality tracking
 - Route include / exclude controls
@@ -47,6 +48,8 @@ qa-check . --profile report
 - 🏗 Build validation
 - 📝 ESLint validation
 - 📘 TypeScript validation
+- 🧠 Code quality insights
+- 🧩 Component and screen structure signals
 - 📱 Responsive design testing
 - ♿ Accessibility audit (axe-core)
 - 🌐 SEO audit
@@ -80,7 +83,8 @@ from the terminal and CI/CD pipelines.
 
 | Area | What it checks |
 | --- | --- |
-| Code Quality | Build, ESLint, TypeScript |
+| Code Quality | Build, ESLint, TypeScript, maintainability, repeated code, debug statements |
+| Structure | Large files, reusable component signals, screen and route flow signals |
 | SEO | Title, description, canonical, Open Graph, Twitter card, structured data |
 | Accessibility | axe-core violations, landmarks, contrast, buttons, image alt text |
 | Performance | Navigation timing, slow pages, Lighthouse performance signals |
@@ -97,6 +101,7 @@ from the terminal and CI/CD pipelines.
 - `--route`, `--ignore-route`, and `--max-routes`
 - `reports/history/` stores compact historical run snapshots
 - `report.md` gives a shareable Markdown summary
+- Code Quality Insights reports maintainability and reusable component signals
 - Pull requests can receive automatic QA Check summary comments
 - Funding metadata and GitHub Sponsors support are included
 

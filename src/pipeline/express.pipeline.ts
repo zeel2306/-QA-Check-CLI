@@ -9,6 +9,7 @@ export class ExpressPipeline extends BasePipeline {
       this.build(),
       this.eslint(),
       this.typeScript(),
+      this.codeQuality(),
       this.routes(),
       this.seo(),
       this.accessibility(),

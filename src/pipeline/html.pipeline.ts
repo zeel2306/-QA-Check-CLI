@@ -9,6 +9,7 @@ export class HtmlPipeline extends BasePipeline {
     return [
       htmlValidation(),
       cssValidation(),
+      this.codeQuality(),
       this.brokenLinks(),
       this.brokenImages(),
       this.seo(),

@@ -9,6 +9,7 @@ export class AngularPipeline extends BasePipeline {
       this.build(),
       this.eslint("Angular Lint"),
       this.typeScript(),
+      this.codeQuality(),
       this.accessibility(),
       this.responsive(),
       this.lighthouse(),

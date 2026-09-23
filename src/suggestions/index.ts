@@ -1,6 +1,7 @@
 import type { CheckResult } from "../types/result.js";
 import { accessibilitySuggestions } from "./accessibility.js";
 import { assetSuggestions } from "./assets.js";
+import { codeQualitySuggestions } from "./codeQuality.js";
 import { consoleSuggestions } from "./console.js";
 import { networkSuggestions } from "./network.js";
 import { performanceSuggestions } from "./performance.js";
@@ -11,6 +12,7 @@ import type { IssueSuggestion, SuggestionMap } from "./types.js";
 export type { IssueSuggestion } from "./types.js";
 
 const suggestions: SuggestionMap = {
+  ...codeQualitySuggestions,
   ...seoSuggestions,
   ...accessibilitySuggestions,
   ...performanceSuggestions,

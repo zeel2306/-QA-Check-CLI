@@ -8,6 +8,7 @@ export class GenericPipeline extends BasePipeline {
     return [
       this.typeScript(),
       this.eslint(),
+      this.codeQuality(),
     ];
   }
 }
