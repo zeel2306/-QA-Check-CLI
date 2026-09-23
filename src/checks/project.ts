@@ -17,7 +17,7 @@ type Validation = {
 };
 
 function commandName(command: string): string {
-  return process.platform === "win32" ? `${command}.cmd` : command;
+  return command;
 }
 
 function exists(projectPath: string, relativePath: string): boolean {
@@ -186,16 +186,16 @@ export const cssValidation = () =>
   });
 
 export const flutterDoctor = () =>
-  new ShellCheck("flutter doctor", commandName("flutter"), ["doctor"]);
+  new ShellCheck("flutter doctor", commandName("flutter"), ["doctor"], "Flutter SDK is not installed or is not available on PATH");
 
 export const pubspecValidation = () =>
-  new ShellCheck("pubspec.yaml validation", commandName("flutter"), ["pub", "get", "--dry-run"]);
+  new ShellCheck("pubspec.yaml validation", commandName("flutter"), ["pub", "get", "--dry-run"], "Flutter SDK is not installed or is not available on PATH");
 
 export const dartAnalyze = () =>
-  new ShellCheck("dart analyze", commandName("dart"), ["analyze"]);
+  new ShellCheck("dart analyze", commandName("dart"), ["analyze"], "Dart SDK is not installed or is not available on PATH");
 
 export const flutterTest = () =>
-  new ShellCheck("flutter test", commandName("flutter"), ["test"]);
+  new ShellCheck("flutter test", commandName("flutter"), ["test"], "Flutter SDK is not installed or is not available on PATH");
 
 export const dependencyValidation = () =>
   new ValidationCheck("dependency validation", (projectPath) => ({
