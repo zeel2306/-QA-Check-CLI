@@ -1,0 +1,225 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+enum Role {
+  OWNER
+  ADMIN
+  DEVELOPER
+  QA
+  VIEWER
+}
+enum IssueStatus {
+  OPEN
+  RESOLVED
+  IGNORED
+  ACCEPTED
+}
+model User {
+  id String @id @default(uuid())
+  clerkId String @unique
+  createdAt DateTime @default(now())
+  memberships OrganizationMember[]
+}
+model Organization {
+  id String @id @default(uuid())
+  name String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  members OrganizationMember[]
+  projects Project[]
+  subscription Subscription?
+  usage Usage[]
+  auditLogs AuditLog[]
+}
+model OrganizationMember {
+  id String @id @default(uuid())
+  organizationId String
+  userId String
+  role Role @default(VIEWER)
+  organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  createdAt DateTime @default(now())
+  @@unique([organizationId,userId])
+  @@index([userId])
+}
+model Project {
+  id String @id @default(uuid())
+  organizationId String
+  organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+  name String
+  description String @default("")
+  websiteUrl String @default("")
+  repository String @default("")
+  framework String @default("Auto Detect")
+  environment String @default("Development")
+  defaultBranch String @default("main")
+  qualityGate Json?
+  archivedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tokens ProjectToken[]
+  runs TestRun[]
+  issues Issue[]
+  @@index([organizationId,archivedAt,createdAt])
+}
+model ProjectToken {
+  id String @id @default(uuid())
+  projectId String
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  name String
+  prefix String
+  hash String @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  lastUsedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([projectId,revokedAt])
+}
+model TestRun {
+  id String @id @default(uuid())
+  projectId String
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  clientRunId String
+  payloadHash String
+  cliVersion String
+  branch String
+  commit String @default("")
+  environment String
+  framework String
+  startedAt DateTime
+  completedAt DateTime
+  durationMs Float
+  overallScore Float
+  categories Json
+  counts Json
+  coverage Json
+  processingStatus String @default("QUEUED")
+  outcome String
+  scoreDelta Float?
+  objectKey String
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  results TestResult[]
+  observations IssueOccurrence[]
+  job ImportJob?
+  @@unique([projectId,clientRunId])
+  @@index([projectId,environment,branch,completedAt])
+}
+model TestResult {
+  id String @id @default(uuid())
+  runId String
+  run TestRun @relation(fields:[runId],references:[id],onDelete:Cascade)
+  name String
+  category String
+  outcome String
+  score Float?
+  durationMs Float
+  message String
+  @@index([runId])
+}
+model Issue {
+  id String @id @default(uuid())
+  projectId String
+  project Project @relation(fields:[projectId],references:[id],onDelete:Cascade)
+  fingerprint String
+  title String
+  category String
+  severity String
+  route String
+  selector String @default("")
+  expected String @default("")
+  actual String
+  suggestion String @default("")
+  status IssueStatus @default(OPEN)
+  firstSeenAt DateTime
+  lastSeenAt DateTime
+  observations IssueOccurrence[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([projectId,fingerprint])
+  @@index([projectId,status,lastSeenAt])
+}
+model IssueOccurrence {
+  id String @id @default(uuid())
+  runId String
+  issueId String
+  run TestRun @relation(fields:[runId],references:[id],onDelete:Cascade)
+  issue Issue @relation(fields:[issueId],references:[id],onDelete:Cascade)
+  change String
+  createdAt DateTime @default(now())
+  @@unique([runId,issueId])
+}
+model ImportJob {
+  id String @id @default(uuid())
+  runId String @unique
+  run TestRun @relation(fields:[runId],references:[id],onDelete:Cascade)
+  payload Json
+  status String @default("QUEUED")
+  attempts Int @default(0)
+  availableAt DateTime @default(now())
+  leaseUntil DateTime?
+  error String?
+  createdAt DateTime @default(now())
+  @@index([status,availableAt])
+}
+model Plan {
+  id String @id @default(uuid())
+  key String @unique
+  name String
+  amountMinor Int
+  currency String @default("INR")
+  projectLimit Int
+  monthlyRunLimit Int
+  providerPlanId String? @unique
+  subscriptions Subscription[]
+}
+model Subscription {
+  id String @id @default(uuid())
+  organizationId String @unique
+  organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+  planId String
+  plan Plan @relation(fields:[planId],references:[id])
+  provider String @default("razorpay")
+  providerId String @unique
+  status String
+  periodEnd DateTime?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+model BillingEvent {
+  id String @id @default(uuid())
+  provider String
+  eventId String
+  eventType String
+  processedAt DateTime @default(now())
+  @@unique([provider,eventId])
+}
+model Usage {
+  id String @id @default(uuid())
+  organizationId String
+  organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+  period String
+  runCount Int @default(0)
+  @@unique([organizationId,period])
+}
+model RateBucket {
+  key String @id
+  count Int
+  expiresAt DateTime
+  @@index([expiresAt])
+}
+model AuditLog {
+  id String @id @default(uuid())
+  organizationId String
+  organization Organization @relation(fields:[organizationId],references:[id],onDelete:Cascade)
+  actor String
+  action String
+  targetId String
+  requestId String
+  createdAt DateTime @default(now())
+  @@index([organizationId,createdAt])
+}

@@ -1,0 +1,2 @@
+import {PublicNav,Footer,Features,Preview} from '@/components/marketing';
+export default function Page(){return <div className="marketing"><PublicNav/><section className="marketing-section"><div className="section-heading"><p className="eyebrow">QUALITY, WITHOUT THE GUESSWORK</p><h1>One clearer picture of your release.</h1><p>From your first local check to your next quality improvement.</p></div><Features/><Preview/></section><Footer/></div>}

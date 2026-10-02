@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: qacheck
+      POSTGRES_PASSWORD: qacheck
+      POSTGRES_DB: qacheck
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - qa-postgres:/var/lib/postgresql/data
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: local-qacheck
+      MINIO_ROOT_PASSWORD: change-this-local-password
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - qa-artifacts:/data
+volumes:
+  qa-postgres:
+  qa-artifacts:

@@ -1,0 +1,4 @@
+import {db} from './db';
+import {ApiError} from './http';
+export async function rateLimit(identity:string,max=60){const window=Math.floor(Date.now()/60000);const key=`${identity}:${window}`;const bucket=await db.rateBucket.upsert({where:{key},create:{key,count:1,expiresAt:new Date((window+2)*60000)},update:{count:{increment:1}}});if(bucket.count>max)throw new ApiError(429,'RATE_LIMITED','Too many requests. Try again in a minute.');}
+export async function planFor(organizationId:string){const sub=await db.subscription.findUnique({where:{organizationId},include:{plan:true}});if(sub&&sub.status==='active'&&sub.periodEnd&&sub.periodEnd>new Date())return sub.plan;const free=await db.plan.findUnique({where:{key:'free'}});if(!free)throw new ApiError(503,'PLANS_NOT_CONFIGURED','Workspace plans have not been seeded.');return free;}

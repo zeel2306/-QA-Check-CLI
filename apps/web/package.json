@@ -1,0 +1,6 @@
+{
+  "name": "qa-check-cloud", "version": "0.1.0", "private": true,
+  "scripts": {"dev": "next dev --hostname 127.0.0.1 --port 3000", "build": "prisma generate && next build", "start": "next start --hostname 127.0.0.1 --port 3000", "typecheck": "tsc --noEmit", "test": "tsx --test tests/*.test.ts", "worker": "tsx worker/main.ts", "db:generate": "prisma generate", "db:migrate": "prisma migrate deploy", "db:seed": "tsx prisma/seed.ts"},
+  "dependencies": {"next": "^16.0.0", "react": "^19.2.0", "react-dom": "^19.2.0", "@clerk/nextjs": "^6.0.0", "@prisma/client": "^6.19.0", "@aws-sdk/client-s3": "^3.900.0", "@aws-sdk/s3-request-presigner": "^3.900.0", "lucide-react": "^0.468.0", "zod": "^4.0.0"},
+  "devDependencies": {"prisma": "^6.19.0", "typescript": "^5.9.0", "@types/node": "^22.0.0", "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "tailwindcss": "^4.0.0", "@tailwindcss/postcss": "^4.0.0", "tsx": "^4.20.0"}
+}
