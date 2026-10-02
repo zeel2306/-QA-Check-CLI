@@ -63,6 +63,17 @@ function normalizeConfig(value: unknown): Partial<QaEngineOptions> {
     config.historyLimit = source.historyLimit;
   }
 
+  if (Array.isArray(source.api)) {
+    config.apiTestCases = source.api.filter(
+      (item): item is import("../checks/api.js").ApiTestCase =>
+        Boolean(item && typeof item === "object" && typeof (item as Record<string, unknown>).url === "string")
+    );
+  }
+
+  if (source.auth && typeof source.auth === "object" && typeof (source.auth as Record<string, unknown>).loginUrl === "string") {
+    config.auth = source.auth as import("./auth.js").AuthConfig;
+  }
+
   return config;
 }
 

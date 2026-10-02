@@ -17,6 +17,17 @@ const defaultConfig = {
   includeRoutes: [],
   ignoreRoutes: ["/api", "/admin"],
   maxRoutes: 50,
+  api: [
+    {
+      name: "Sample Health Check API",
+      method: "GET",
+      url: "https://jsonplaceholder.typicode.com/todos/1",
+      expect: {
+        status: 200,
+        responseTime: 2000
+      }
+    }
+  ]
 };
 
 const workflow = `name: QA Check

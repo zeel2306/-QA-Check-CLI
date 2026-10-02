@@ -13,6 +13,9 @@ import { executeCheck, toQACheck } from "./executor.js";
 import type { QaProfile } from "./profile.js";
 import { createHistoryTrend, readHistory, writeHistorySnapshot } from "../history.js";
 
+import { ApiTestingCheck, type ApiTestCase } from "../checks/api.js";
+import type { AuthConfig } from "./auth.js";
+
 export interface QaEngineOptions {
   profile?: QaProfile;
   ci?: boolean;
@@ -30,6 +33,8 @@ export interface QaEngineOptions {
   historyLimit?: number;
   baseline?: string;
   baselineComparison?: boolean;
+  apiTestCases?: ApiTestCase[];
+  auth?: AuthConfig;
 }
 
 async function readPackageJson(projectPath: string): Promise<Record<string, unknown> | undefined> {
@@ -96,8 +101,12 @@ export async function runQaEngine(
     packageJson,
   };
 
- try {
-  const checks = pipeline.checks().map(toQACheck);
+  try {
+    const rawChecks = pipeline.checks();
+    if (options.apiTestCases && options.apiTestCases.length > 0) {
+      rawChecks.push(new ApiTestingCheck(options.apiTestCases));
+    }
+    const checks = rawChecks.map(toQACheck);
   const registry = createCheckRegistry(checks);
   const executionPlan = registry.getAll();
 

@@ -38,6 +38,54 @@ async function main() {
     return;
   }
 
+  if (args[0] === "fix" || args[0] === "autofix") {
+    const targetPath = args[1] && !args[1].startsWith("--") ? args[1] : process.cwd();
+    const resolvedProjectPath = fs.realpathSync.native(path.resolve(targetPath));
+    const dryRun = args.includes("--dry-run");
+
+    const { runAutoFix } = await import("./fixers/runner.js");
+    await runAutoFix(resolvedProjectPath, { dryRun });
+    return;
+  }
+
+  if (args[0] === "doctor") {
+    const targetPath = args[1] && !args[1].startsWith("--") ? args[1] : process.cwd();
+    const resolvedProjectPath = fs.realpathSync.native(path.resolve(targetPath));
+
+    const { runDoctor } = await import("./core/doctor.js");
+    const result = await runDoctor(resolvedProjectPath);
+    if (!result.ready) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (args[0] === "api") {
+    const targetPath = args[1] && !args[1].startsWith("--") ? args[1] : process.cwd();
+    const resolvedProjectPath = fs.realpathSync.native(path.resolve(targetPath));
+
+    const config = loadConfig(resolvedProjectPath);
+    if (!config.apiTestCases || config.apiTestCases.length === 0) {
+      console.log('No API test cases configured in qa-check.config.json. Add an "api" array to get started.');
+      return;
+    }
+
+    const { ApiTestingCheck } = await import("./checks/api.js");
+    const check = new ApiTestingCheck(config.apiTestCases);
+    const result = await check.run(resolvedProjectPath);
+
+    console.log(`\n📡 API Testing Results (${result.data?.passed}/${result.data?.total} Passed)\n`);
+    for (const item of result.data?.results || []) {
+      const icon = item.status === "PASS" ? "✔" : "✖";
+      console.log(`${icon} [${item.method}] ${item.url} - ${item.message}`);
+    }
+    console.log("");
+    if (result.status === "FAIL") {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
 const options: QaEngineOptions = {};
 const explicitOptions: QaEngineOptions = {};
 

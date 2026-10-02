@@ -13,6 +13,7 @@ export type IssueCategory =
   | "routing"
   | "lighthouse"
   | "project"
+  | "api"
   | "unknown";
 
 export type IssueSeverity = "info" | "warning" | "error";

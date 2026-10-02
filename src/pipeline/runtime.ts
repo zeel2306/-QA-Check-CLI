@@ -68,7 +68,12 @@ export class PipelineRuntime {
   async browserAudit(): Promise<BrowserAudit> {
     this.browserAuditPromise ??= (async () => {
       const [server, routes] = await Promise.all([this.server(), this.routes()]);
-      return runBrowserAudit(server.url, routes, this.reportDir);
+      let authSession: import("../core/auth.js").AuthSession | undefined;
+      if (this.options.auth) {
+        const { authenticateSession } = await import("../core/auth.js");
+        authSession = await authenticateSession(this.options.auth, server.url);
+      }
+      return runBrowserAudit(server.url, routes, this.reportDir, authSession);
     })();
 
     return this.browserAuditPromise;

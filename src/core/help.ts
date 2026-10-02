@@ -14,6 +14,22 @@ const examples = [
     description: "Create qa-check.config.json and a GitHub Actions workflow.",
   },
   {
+    command: "qa-check doctor",
+    description: "Diagnose local environment, Node, browsers, Git, framework, and tool readiness.",
+  },
+  {
+    command: "qa-check api",
+    description: "Run REST API endpoint tests defined in qa-check.config.json.",
+  },
+  {
+    command: "qa-check fix",
+    description: "Automatically fix code quality issues, debug statements, and HTML accessibility/meta tags.",
+  },
+  {
+    command: "qa-check fix --dry-run",
+    description: "Preview automatic fixes without modifying files on disk.",
+  },
+  {
     command: "qa-check . --profile report",
     description: "Generate reports without failing because of QA issues. Best for testing/documentation.",
   },
@@ -52,7 +68,8 @@ export function printHelp(): void {
   console.log("Framework-aware website QA checks from the terminal.\n");
   console.log(chalk.bold("Usage"));
   console.log("  qa-check [project-path] [options]");
-  console.log("  qa-check init [project-path]\n");
+  console.log("  qa-check init [project-path]");
+  console.log("  qa-check fix [project-path] [--dry-run]\n");
   console.log(chalk.bold("Common Commands"));
 
   for (const example of examples) {

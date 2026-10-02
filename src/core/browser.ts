@@ -3,6 +3,7 @@ import path from "path";
 import { chromium, type Browser, type Page } from "playwright";
 import axe from "axe-core";
 import type { BrowserIssue } from "../types/result.js";
+import type { AuthSession } from "./auth.js";
 
 export const VIEWPORTS = {
   Desktop: { width: 1920, height: 1080 },
@@ -338,6 +339,7 @@ export async function runBrowserAudit(
   baseUrl: string,
   routes: string[],
   reportDir: string,
+  authSession?: AuthSession,
 ): Promise<BrowserAudit> {
   const audit = emptyAudit(baseUrl, routes);
 
@@ -369,7 +371,12 @@ export async function runBrowserAudit(
           try {
             context = await browser.newContext({
               viewport: VIEWPORTS.Desktop,
+              extraHTTPHeaders: authSession?.headers,
             });
+
+            if (authSession?.cookies && authSession.cookies.length > 0) {
+              await context.addCookies(authSession.cookies);
+            }
 
             const page = await context.newPage();
 
