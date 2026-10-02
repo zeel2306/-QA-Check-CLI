@@ -274,9 +274,37 @@ jobs:
 
       - name: Fail workflow when QA threshold is not met
         if: always() && steps.qa.outputs.exit_code != '0'
+        env:
+          QA_EXIT_CODE: ${{ steps.qa.outputs.exit_code }}
         shell: bash
         run: |
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const reportPath = path.join(process.env.REPORT_DIR || 'reports', 'report.json');
+          if (!fs.existsSync(reportPath)) {
+            console.log('No report.json was generated. Inspect the earlier Run QA Check CLI step for the execution failure.');
+          } else {
+            try {
+              const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+              const failed = (report.results || []).filter((result) =>
+                result.status === 'FAIL' || result.status === 'ERROR'
+              );
+              console.log(`Overall QA score: ${report.overallScore ?? 'unknown'}/100`);
+              console.log(`Failed/error checks: ${failed.length}`);
+              for (const result of failed) {
+                const name = String(result.name || 'Unnamed check').replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 100);
+                console.log(`  ${result.status}: ${name}`);
+              }
+              console.log('Download the qa-check-reports artifact and open index.html for findings and suggested fixes.');
+            } catch {
+              console.log('report.json could not be read. Inspect the earlier QA step and downloaded artifacts.');
+            }
+          }
+          NODE
+
           echo "QA Check completed, reports were uploaded when available."
-          echo "Failing this workflow because --ci returned exit code ${{ steps.qa.outputs.exit_code }}."
+          echo "Failing this workflow because --ci returned exit code ${QA_EXIT_CODE:-unknown}."
           echo "This usually means one or more checks matched the configured --fail-on threshold (${FAIL_ON})."
-          exit "${{ steps.qa.outputs.exit_code }}"
+          exit "${QA_EXIT_CODE:-1}"
