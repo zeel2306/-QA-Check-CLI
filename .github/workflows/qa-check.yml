@@ -64,9 +64,23 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Select QA project and report directory
+        shell: bash
+        run: |
+          QA_PROJECT_DIR=.
+          if [ -f apps/web/package.json ]; then
+            QA_PROJECT_DIR=apps/web
+          fi
+          echo "QA_PROJECT_DIR=${QA_PROJECT_DIR}" >> "$GITHUB_ENV"
+          echo "QA_OUTPUT_DIR=${REPORT_DIR}" >> "$GITHUB_ENV"
+          echo "REPORT_DIR=${QA_PROJECT_DIR}/${REPORT_DIR}" >> "$GITHUB_ENV"
+          echo "QA project: ${QA_PROJECT_DIR}"
+          echo "Reports: ${QA_PROJECT_DIR}/${REPORT_DIR}"
+
       - name: Install project dependencies
         shell: bash
         run: |
+          cd "${QA_PROJECT_DIR}"
           if [ -f package-lock.json ]; then
             npm ci
           elif [ -f package.json ]; then
@@ -113,7 +127,7 @@ jobs:
 
           echo "========== RUNNING QA CHECK =========="
 
-          QA_ARGS=(. --ci --pdf --profile "${QA_PROFILE}" --output "${REPORT_DIR}")
+          QA_ARGS=("${QA_PROJECT_DIR}" --ci --pdf --profile "${QA_PROFILE}" --output "${QA_OUTPUT_DIR}")
 
           if [ "${FAIL_ON}" != "profile" ]; then
             QA_ARGS+=(--fail-on "${FAIL_ON}")
@@ -284,7 +298,7 @@ jobs:
 
           const reportPath = path.join(process.env.REPORT_DIR || 'reports', 'report.json');
           if (!fs.existsSync(reportPath)) {
-            console.log('No report.json was generated. Inspect the earlier Run QA Check CLI step for the execution failure.');
+            console.log(`No report.json found at ${reportPath}. Inspect the earlier Install project dependencies and Run QA Check CLI steps for the execution failure.`);
           } else {
             try {
               const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
