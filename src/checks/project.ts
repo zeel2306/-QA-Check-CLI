@@ -176,13 +176,65 @@ export const pluginValidation = () =>
 export const htmlValidation = () =>
   new ValidationCheck("HTML Validation", (projectPath) => {
     const htmlFiles = findFiles(projectPath, (file) => file.endsWith(".html"));
-    return { ok: htmlFiles.length > 0, message: `${htmlFiles.length} HTML file(s) found`, data: htmlFiles.slice(0, 100) };
+    if (htmlFiles.length === 0) {
+      return { ok: true, message: "No HTML files found to validate", data: [] };
+    }
+
+    const issues: string[] = [];
+    for (const file of htmlFiles.slice(0, 100)) {
+      try {
+        const content = fs.readFileSync(path.join(projectPath, file), "utf8");
+        // Basic structural validation: DOCTYPE and tag matching check
+        if (!/<!DOCTYPE\s+html/i.test(content)) {
+          issues.push(`${file}: Missing <!DOCTYPE html> declaration`);
+        }
+        const openTags = (content.match(/<html\b/gi) || []).length;
+        const closeTags = (content.match(/<\/html>/gi) || []).length;
+        if (openTags !== closeTags) {
+          issues.push(`${file}: Mismatched <html> opening/closing tags`);
+        }
+      } catch {
+        // Ignore file read errors
+      }
+    }
+
+    return {
+      ok: issues.length === 0,
+      message: issues.length ? `${issues.length} HTML validation issue(s) found` : `${htmlFiles.length} HTML file(s) checked`,
+      data: { htmlFiles: htmlFiles.slice(0, 100), issues },
+    };
   });
 
 export const cssValidation = () =>
   new ValidationCheck("CSS Validation", (projectPath) => {
     const cssFiles = findFiles(projectPath, (file) => file.endsWith(".css"));
-    return { ok: true, message: `${cssFiles.length} CSS file(s) found`, data: cssFiles.slice(0, 100) };
+    if (cssFiles.length === 0) {
+      return { ok: true, message: "No CSS files found to validate", data: [] };
+    }
+
+    const issues: string[] = [];
+    for (const file of cssFiles.slice(0, 100)) {
+      try {
+        const content = fs.readFileSync(path.join(projectPath, file), "utf8");
+        // Check for unbalanced braces
+        let braceCount = 0;
+        for (let i = 0; i < content.length; i++) {
+          if (content[i] === "{") braceCount++;
+          if (content[i] === "}") braceCount--;
+        }
+        if (braceCount !== 0) {
+          issues.push(`${file}: Unbalanced CSS braces ({})`);
+        }
+      } catch {
+        // Ignore file read errors
+      }
+    }
+
+    return {
+      ok: issues.length === 0,
+      message: issues.length ? `${issues.length} CSS validation issue(s) found` : `${cssFiles.length} CSS file(s) checked`,
+      data: { cssFiles: cssFiles.slice(0, 100), issues },
+    };
   });
 
 export const flutterDoctor = () =>

@@ -60,6 +60,18 @@ async function main() {
     return;
   }
 
+  if (args[0] === "compare") {
+    const file1 = args[1] && !args[1].startsWith("--") ? args[1] : path.join("reports", "report.json");
+    const file2 = args[2] && !args[2].startsWith("--") ? args[2] : undefined;
+
+    const { runCompareCommand } = await import("./baseline/cli.js");
+    const exitCode = await runCompareCommand(file1, file2);
+    if (exitCode !== 0) {
+      process.exitCode = exitCode;
+    }
+    return;
+  }
+
   if (args[0] === "api") {
     const targetPath = args[1] && !args[1].startsWith("--") ? args[1] : process.cwd();
     const resolvedProjectPath = fs.realpathSync.native(path.resolve(targetPath));
@@ -80,6 +92,95 @@ async function main() {
       console.log(`${icon} [${item.method}] ${item.url} - ${item.message}`);
     }
     console.log("");
+    if (result.status === "FAIL") {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (args[0] === "flow") {
+    const flowArg = args[1] && !args[1].startsWith("--") ? args[1] : process.cwd();
+    const resolvedPath = path.resolve(flowArg);
+
+    const { loadFlowsFromTarget } = await import("./core/flowLoader.js");
+    let flows = await loadFlowsFromTarget(resolvedPath);
+
+    if (flows.length === 0) {
+      const config = loadConfig(process.cwd());
+      flows = config.flows || [];
+    }
+
+    if (flows.length === 0) {
+      console.log(`No E2E flows found at '${flowArg}' or in qa-check.config.json.`);
+      return;
+    }
+
+    const { E2EFlowTestingCheck } = await import("./checks/e2e.js");
+    const { PipelineRuntime } = await import("./pipeline/runtime.js");
+
+    const runtime = new PipelineRuntime(process.cwd(), "reports", {});
+    const check = new E2EFlowTestingCheck(flows, await runtime.baseUrl(), undefined, "reports");
+    const result = await check.run(process.cwd());
+
+    console.log(`\n🎭 Declarative E2E Flow Testing (${result.data?.passedFlows}/${result.data?.totalFlows} Flows Passed)\n`);
+    for (const flowResult of result.data?.results || []) {
+      const icon = flowResult.status === "PASS" ? "✔" : "✖";
+      console.log(`${icon} Flow: ${flowResult.name}`);
+      for (let sIdx = 0; sIdx < flowResult.steps.length; sIdx++) {
+        const step = flowResult.steps[sIdx];
+        const isLast = sIdx === flowResult.steps.length - 1;
+        const prefix = isLast ? "  └─" : "  ├─";
+        console.log(`${prefix} [${step.action}] ${step.target ? `${step.target} ` : ""}(${step.message})`);
+      }
+    }
+    console.log("");
+
+    await runtime.stop();
+
+    if (result.status === "FAIL") {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (args[0] === "test" || args[0] === "e2e") {
+    const targetPath = args[1] && !args[1].startsWith("--") ? args[1] : process.cwd();
+    const resolvedProjectPath = fs.realpathSync.native(path.resolve(targetPath));
+
+    const config = loadConfig(resolvedProjectPath);
+    if (!config.flows || config.flows.length === 0) {
+      console.log('No E2E user flows configured in qa-check.config.json. Add a "flows" array to get started.');
+      return;
+    }
+
+    const { E2EFlowTestingCheck } = await import("./checks/e2e.js");
+    const { PipelineRuntime } = await import("./pipeline/runtime.js");
+
+    const runtime = new PipelineRuntime(resolvedProjectPath, "reports", config);
+    let authSession: import("./core/auth.js").AuthSession | undefined;
+    if (config.auth) {
+      const { authenticateSession } = await import("./core/auth.js");
+      authSession = await authenticateSession(config.auth, await runtime.baseUrl());
+    }
+
+    const check = new E2EFlowTestingCheck(config.flows, await runtime.baseUrl(), authSession, "reports");
+    const result = await check.run(resolvedProjectPath);
+
+    console.log(`\n🎭 Declarative E2E Flow Testing (${result.data?.passedFlows}/${result.data?.totalFlows} Flows Passed)\n`);
+    for (const flowResult of result.data?.results || []) {
+      const icon = flowResult.status === "PASS" ? "✔" : "✖";
+      console.log(`${icon} Flow: ${flowResult.name}`);
+      for (let sIdx = 0; sIdx < flowResult.steps.length; sIdx++) {
+        const step = flowResult.steps[sIdx];
+        const isLast = sIdx === flowResult.steps.length - 1;
+        const prefix = isLast ? "  └─" : "  ├─";
+        console.log(`${prefix} [${step.action}] ${step.target ? `${step.target} ` : ""}(${step.message})`);
+      }
+    }
+    console.log("");
+
+    await runtime.stop();
+
     if (result.status === "FAIL") {
       process.exitCode = 1;
     }
@@ -146,6 +247,11 @@ const explicitOptions: QaEngineOptions = {};
 
       case "--output":
         explicitOptions.output = args[++i] || "reports";
+        break;
+
+      case "--url":
+      case "--base-url":
+        explicitOptions.url = args[++i];
         break;
 
       case "--baseline":

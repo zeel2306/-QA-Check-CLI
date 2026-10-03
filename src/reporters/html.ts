@@ -52,6 +52,8 @@ function getStatusColor(status: CheckStatus): string {
       return "#94a3b8";
     case "ERROR":
       return "#f43f5e";
+    case "NOT_APPLICABLE":
+      return "#64748b";
   }
 }
 
@@ -67,6 +69,8 @@ function statusIcon(status: CheckStatus): string {
       return "○";
     case "ERROR":
       return "×";
+    case "NOT_APPLICABLE":
+      return "-";
   }
 }
 
@@ -304,12 +308,14 @@ function renderHero(report: AuditReport): string {
 
 function renderAnalytics(report: AuditReport): string {
   const analytics = getAnalytics(report);
+  const cov = report.coverage;
   const cards = [
     ["PASS checks", analytics.pass, "Completed successfully", "pass"],
     ["WARNING checks", analytics.warning, "Need review", "warning"],
     ["FAIL checks", analytics.fail, "Require action", "fail"],
     ["ERROR checks", analytics.error, "Execution errors", "fail"],
     ["Skipped checks", analytics.skipped || report.checksSkipped.length, "Not executed", "skipped"],
+    ["Scan Coverage", cov ? `${cov.coveragePercent}%` : "100%", `${cov?.executedSuccessfully ?? 0}/${cov?.applicableScanners ?? 0} executed`, "score"],
     ["Average Score", `${analytics.averageScore}/100`, "Across scored checks", "score"],
     ["Total Issues", analytics.totalIssues, "Across all checks", "issues"],
   ] as const;
@@ -339,56 +345,151 @@ function formatDelta(delta: number | undefined, inverse = false): string {
   return `${sign}${delta} ${improved ? "↑" : "↓"}`;
 }
 
+function renderQualityGatesBanner(report: AuditReport): string {
+  const currentGate = report.currentQualityGate;
+  const currentClass = currentGate?.passed ? "gate-passed" : "gate-failed";
+  const currentTitle = currentGate?.passed ? "Current Quality Gate: PASSED ✅" : "Current Quality Gate: FAILED ❌";
+
+  const baselineGate = report.baseline?.qualityGate;
+  const regClass = baselineGate?.passed ? "gate-passed" : "gate-failed";
+  const regTitle = baselineGate?.passed ? "Regression Gate: PASSED ✅" : "Regression Gate: FAILED ❌";
+
+  return `
+    <section class="section quality-gates-panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">QUALITY GATES</p>
+          <h2>Quality & Regression Gate Status</h2>
+        </div>
+      </div>
+      <div class="quality-gates-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:1rem;">
+        <div class="quality-gate-banner ${currentClass}">
+          <h3>${currentTitle}</h3>
+          <ul>
+            ${(currentGate?.reasons.length ? currentGate.reasons : ["All applicable checks passed threshold"]).map((r) => `<li>${escape(r)}</li>`).join("")}
+          </ul>
+        </div>
+        ${
+          baselineGate
+            ? `
+          <div class="quality-gate-banner ${regClass}">
+            <h3>${regTitle}</h3>
+            <ul>
+              ${(baselineGate.reasons.length ? baselineGate.reasons : ["No regressions detected"]).map((r) => `<li>${escape(r)}</li>`).join("")}
+            </ul>
+          </div>
+        `
+            : ""
+        }
+      </div>
+    </section>
+  `;
+}
+
 function renderBaseline(report: AuditReport): string {
   if (!report.baseline) return "";
 
   const baseline = report.baseline;
-  const changedChecks = baseline.checks
-    .filter((check) => check.score.delta !== 0 || check.issues.delta !== 0 || check.status.changed)
-    .slice(0, 12);
+  const qGate = baseline.qualityGate;
+  const catScores = baseline.categoryScores || [];
+  const { newIssues = [], fixedIssues = [], regressedChecks = [] } = baseline.categorizedIssues || {};
+
+  const gateClass = qGate?.passed ? "gate-passed" : "gate-failed";
+  const gateTitle = qGate?.passed ? "Regression Gate: PASSED ✅" : "Regression Gate: FAILED ❌";
+
+  const catRows = catScores.length > 0
+    ? catScores
+        .map(
+          (c) => `
+            <div class="cat-row ${c.status === "REGRESSED" ? "regressed" : "improved"}">
+              <strong>${escape(c.category)}</strong>
+              <span>${c.previousScore} → ${c.currentScore}</span>
+              <span class="badge ${c.status === "REGRESSED" ? "badge-red" : "badge-green"}">
+                ${c.status === "REGRESSED" ? "🔴 Regressed" : "🟢 Stable/Improved"}
+              </span>
+            </div>
+          `,
+        )
+        .join("")
+    : "";
+
+  const newIssuesHtml = newIssues.length > 0
+    ? `
+      <div class="regression-sub-panel">
+        <h3 class="text-red">NEW ISSUES ❌ (${newIssues.length})</h3>
+        <ul class="regression-list">
+          ${newIssues
+            .slice(0, 10)
+            .map(
+              (i) => `
+                <li>
+                  <span class="tag tag-red">[${escape(i.checkName)}]</span>
+                  <strong>${escape(i.message)}</strong>
+                  ${i.route || i.file ? `<small>(${escape(i.route || i.file)})</small>` : ""}
+                </li>
+              `,
+            )
+            .join("")}
+        </ul>
+        ${newIssues.length > 10 ? `<p class="detail-note">+ ${newIssues.length - 10} more new issues not shown</p>` : ""}
+      </div>
+    `
+    : "";
+
+  const fixedIssuesHtml = fixedIssues.length > 0
+    ? `
+      <div class="regression-sub-panel">
+        <h3 class="text-green">FIXED ISSUES ✅ (${fixedIssues.length})</h3>
+        <ul class="regression-list">
+          ${fixedIssues
+            .slice(0, 10)
+            .map(
+              (i) => `
+                <li>
+                  <span class="tag tag-green">[${escape(i.checkName)}]</span>
+                  <strong>${escape(i.message)}</strong>
+                  ${i.route || i.file ? `<small>(${escape(i.route || i.file)})</small>` : ""}
+                </li>
+              `,
+            )
+            .join("")}
+        </ul>
+        ${fixedIssues.length > 10 ? `<p class="detail-note">+ ${fixedIssues.length - 10} more fixed issues not shown</p>` : ""}
+      </div>
+    `
+    : "";
 
   return `
     <section class="section baseline-panel">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Baseline</p>
-          <h2>Comparison with previous run</h2>
+          <p class="eyebrow">REGRESSION DETECTION</p>
+          <h2>Baseline Comparison vs Previous Scan</h2>
         </div>
-        <span>${escape(formatDate(baseline.previousRun))}</span>
+        <span>Previous run: ${escape(formatDate(baseline.previousRun))}</span>
       </div>
-      <div class="baseline-summary">
-        <article>
-          <span>Previous Score</span>
-          <strong>${baseline.overallScore.previous}/100</strong>
-        </article>
-        <article>
-          <span>Current Score</span>
-          <strong>${baseline.overallScore.current}/100</strong>
-        </article>
-        <article class="${baseline.overallScore.delta >= 0 ? "positive" : "negative"}">
-          <span>Improvement</span>
-          <strong>${escape(formatDelta(baseline.overallScore.delta))}</strong>
-        </article>
-        <article class="${baseline.totalIssues.delta <= 0 ? "positive" : "negative"}">
-          <span>Total Issues</span>
-          <strong>${escape(formatDelta(baseline.totalIssues.delta, true))}</strong>
-        </article>
+
+      <div class="quality-gate-banner ${gateClass}">
+        <h3>${gateTitle}</h3>
+        <ul>
+          ${(qGate?.reasons || []).map((r) => `<li>${escape(r)}</li>`).join("")}
+        </ul>
       </div>
-      <div class="baseline-table">
-        ${changedChecks.length
-          ? changedChecks
-              .map(
-                (check) => `
-                  <div>
-                    <strong>${escape(check.name)}</strong>
-                    <span>Score ${escape(formatDelta(check.score.delta))}</span>
-                    <span>Issues ${escape(formatDelta(check.issues.delta, true))}</span>
-                    <span>${escape(check.status.previous ?? "New")} → ${escape(check.status.current)}</span>
-                  </div>
-                `,
-              )
-              .join("")
-          : "<p class=\"empty-state\">No check-level changes detected.</p>"}
+
+      ${
+        catRows
+          ? `
+        <div class="category-comparison-grid">
+          <h3>Category Score Comparison</h3>
+          <div class="cat-grid">${catRows}</div>
+        </div>
+      `
+          : ""
+      }
+
+      <div class="issue-diff-container">
+        ${newIssuesHtml}
+        ${fixedIssuesHtml}
       </div>
     </section>
   `;
@@ -486,7 +587,7 @@ function renderToolbar(): string {
 function renderCheckCard(result: CheckResult): string {
   const issueCount = getIssueCount(result);
   const color = getStatusColor(result.status);
-  const score = result.score === undefined ? "N/A" : clampScore(result.score);
+  const score = typeof result.score === "number" ? clampScore(result.score) : "N/A";
 
   return `
     <article class="check-card ${result.status.toLowerCase()}" data-check-card data-name="${escape(result.name.toLowerCase())}" data-status="${result.status}">
@@ -502,7 +603,7 @@ function renderCheckCard(result: CheckResult): string {
         <div><span>Issues</span><strong>${issueCount}</strong></div>
         <div><span>Duration</span><strong>${escape(formatDuration(result.duration))}</strong></div>
       </div>
-      ${renderProgress(result.score)}
+      ${renderProgress(typeof result.score === "number" ? result.score : undefined)}
       <div class="summary-block">
         <strong>${issueCount === 0 ? "✓ No issues detected" : `! ${issueCount} issue${issueCount === 1 ? "" : "s"} found`}</strong>
         <p>${escape(result.message ?? "No summary provided.")}</p>
@@ -1076,6 +1177,7 @@ function renderHtml(report: AuditReport): string {
     <div class="page">
       ${renderHero(report)}
       ${renderAnalytics(report)}
+      ${renderQualityGatesBanner(report)}
       ${renderBaseline(report)}
       ${renderHistory(report)}
       ${renderToolbar()}

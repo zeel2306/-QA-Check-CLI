@@ -30,11 +30,13 @@ const defaultConfig = {
   ]
 };
 
-const workflow = `name: QA Check
+const workflow = `name: QA Check Quality Gate
 
 on:
   push:
+    branches: [ main, master, develop ]
   pull_request:
+    branches: [ main, master, develop ]
   workflow_dispatch:
 
 permissions:
@@ -43,13 +45,13 @@ permissions:
 
 env:
   NODE_VERSION: 20
-  QA_PROFILE: report
+  QA_PROFILE: ci
   REPORT_DIR: reports
   QA_CHECK_PACKAGE: qa-check-cli@latest
 
 jobs:
   qa-check:
-    name: Run QA Check
+    name: QA Quality Gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -69,92 +71,92 @@ jobs:
             npm ci
           elif [ -f package.json ]; then
             npm install
-          else
-            echo "No package.json found. Skipping dependency installation."
           fi
 
       - name: Install browser dependencies
         shell: bash
         run: npx -y playwright install --with-deps chromium
 
-      - name: Run QA Check CLI
+      - name: Restore main branch baseline scan
+        uses: actions/cache/restore@v4
+        with:
+          path: reports/baseline.json
+          key: qa-check-baseline-\${{ github.event.repository.default_branch }}
+
+      - name: Run QA Check CLI Quality Gate
         id: qa
         shell: bash
         run: |
           set +e
-          npx -y "\${QA_CHECK_PACKAGE}" . --ci --pdf --profile "\${QA_PROFILE}" --output "\${REPORT_DIR}" 2>&1 | tee qa-output.log
+          CMD="npx -y \${QA_CHECK_PACKAGE} . --ci --profile \${QA_PROFILE} --output \${REPORT_DIR}"
+          if [ -f "reports/baseline.json" ]; then
+            CMD="$CMD --baseline reports/baseline.json"
+          fi
+          $CMD 2>&1 | tee qa-output.log
           EXIT_CODE=\${PIPESTATUS[0]}
           echo "exit_code=\${EXIT_CODE}" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Detect generated reports
-        id: reports
-        if: always()
-        shell: bash
-        run: |
-          if [ -d "\${REPORT_DIR}" ] && [ "$(find "\${REPORT_DIR}" -type f | wc -l)" -gt 0 ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Save baseline scan (on main branch push)
+        if: github.event_name == 'push' && (github.ref_name == github.event.repository.default_branch || github.ref_name == 'main' || github.ref_name == 'master')
+        uses: actions/cache/save@v4
+        with:
+          path: reports/report.json
+          key: qa-check-baseline-\${{ github.event.repository.default_branch }}-\${{ github.sha }}
 
-      - name: Write workflow summary
-        if: always() && steps.reports.outputs.exists == 'true'
-        shell: bash
-        run: |
-          node - <<'NODE'
-          const fs = require("fs");
-          const path = require("path");
-          const reportPath = path.join(process.env.REPORT_DIR || "reports", "report.json");
-          const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-          if (!summaryPath || !fs.existsSync(reportPath)) process.exit(0);
-          const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-          const counts = { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, SKIPPED: 0 };
-          for (const result of report.results || []) counts[result.status] = (counts[result.status] || 0) + 1;
-          fs.appendFileSync(summaryPath, [
-            "# QA Check Report",
-            "",
-            "| Field | Value |",
-            "| --- | --- |",
-            \`| Overall Score | \${report.overallScore ?? 0}/100 |\`,
-            \`| Framework | \${report.framework || "Unknown"} |\`,
-            \`| PASS | \${counts.PASS} |\`,
-            \`| WARNING | \${counts.WARNING} |\`,
-            \`| FAIL | \${counts.FAIL + counts.ERROR} |\`,
-            \`| SKIPPED | \${counts.SKIPPED} |\`,
-            "",
-          ].join("\\n"));
-          NODE
-
-      - name: Comment on pull request
-        if: always() && github.event_name == 'pull_request' && steps.reports.outputs.exists == 'true'
+      - name: Comment PR Quality Gate Summary
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require("fs");
             const path = require("path");
-            const marker = "<!-- qa-check-cli-report -->";
+            const marker = "<!-- qa-check-pr-quality-gate -->";
             const reportPath = path.join(process.env.REPORT_DIR || "reports", "report.json");
             if (!fs.existsSync(reportPath)) return;
             const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-            const counts = { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, SKIPPED: 0 };
-            for (const result of report.results || []) counts[result.status] = (counts[result.status] || 0) + 1;
+            
+            const b = report.baseline;
+            const qg = b ? b.qualityGate : null;
+            const gatePassed = qg ? qg.passed : (report.overallScore >= 80);
+            const gateBanner = gatePassed ? "### Quality Gate: PASSED ✅" : "### Quality Gate: FAILED ❌";
+            
+            let catRows = "";
+            if (b && b.categoryScores) {
+              catRows = b.categoryScores.map(c => {
+                const icon = c.status === "REGRESSED" ? "🔴" : "🟢";
+                return \`| **\${c.category}** | \${c.previousScore} → \${c.currentScore} | \${icon} |\`;
+              }).join("\\n");
+            }
+
+            let newIssuesMD = "";
+            if (b && b.categorizedIssues && b.categorizedIssues.newIssues && b.categorizedIssues.newIssues.length > 0) {
+              newIssuesMD = "\\n\\n#### ❌ New Issues Detected\\n" + b.categorizedIssues.newIssues.map(i => \`- **[\${i.checkName}]** \${i.message}\`).join("\\n");
+            }
+
+            let fixedIssuesMD = "";
+            if (b && b.categorizedIssues && b.categorizedIssues.fixedIssues && b.categorizedIssues.fixedIssues.length > 0) {
+              fixedIssuesMD = "\\n\\n#### ✅ Fixed Issues\\n" + b.categorizedIssues.fixedIssues.map(i => \`- **[\${i.checkName}]** \${i.message}\`).join("\\n");
+            }
+
             const body = [
               marker,
-              "## QA Check Report",
+              "## 🛡️ QA Check Quality Gate Report",
               "",
-              \`**Score:** \${report.overallScore ?? 0}/100\`,
-              \`**Framework:** \${report.framework || "Unknown"}\`,
+              gateBanner,
               "",
-              "| Status | Count |",
-              "| --- | ---: |",
-              \`| PASS | \${counts.PASS} |\`,
-              \`| WARNING | \${counts.WARNING} |\`,
-              \`| FAIL | \${counts.FAIL + counts.ERROR} |\`,
-              \`| SKIPPED | \${counts.SKIPPED} |\`,
+              \`**Overall Score:** \\\`\${report.overallScore}/100\\\` \`,
+              \`**Framework:** \\\`\${report.framework}\\\` \`,
+              \`**Commit:** \\\`\${context.sha.substring(0, 7)}\\\` \`,
               "",
-              "Download the uploaded \`qa-check-reports\` artifact to view HTML, JSON, PDF, and screenshots.",
-            ].join("\\n");
+              catRows ? "#### Category Trends\\n| Category | Score | Status |\\n| --- | --- | :---: |\\n" + catRows : "",
+              newIssuesMD,
+              fixedIssuesMD,
+              "",
+              "---",
+              "📥 *Download the attached \\\`qa-check-reports\\\` artifact to view full HTML, JSON, PDF, and screenshots.*"
+            ].filter(Boolean).join("\\n");
+
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
@@ -165,8 +167,8 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
 
-      - name: Upload QA Reports
-        if: always() && steps.reports.outputs.exists == 'true'
+      - name: Upload QA Reports & Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: qa-check-reports
@@ -179,7 +181,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Fail workflow when QA threshold is not met
+      - name: Fail Workflow if Quality Gate Failed
         if: always() && steps.qa.outputs.exit_code != '0'
         shell: bash
         run: exit "\${{ steps.qa.outputs.exit_code }}"

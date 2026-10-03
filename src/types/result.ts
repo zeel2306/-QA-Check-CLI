@@ -1,16 +1,21 @@
 import type { IssueCategory, QAIssue } from "./issue.js";
 
-export type CheckStatus = "PASS" | "FAIL" | "WARNING" | "SKIPPED" | "ERROR";
+export type CheckStatus = "PASS" | "FAIL" | "WARNING" | "SKIPPED" | "ERROR" | "NOT_APPLICABLE";
 
 export interface CheckResult<T = unknown> {
   name: string;
   category?: IssueCategory;
   status: CheckStatus;
-  score?: number;
+  score?: number | null;
   message?: string;
   duration: number;
   startedAt?: string;
   finishedAt?: string;
+  skipReason?: string;
+  errorReason?: string;
+  pagesAttempted?: number;
+  pagesCompleted?: number;
+  pagesDiscovered?: number;
   issues?: QAIssue[];
   error?: {
     name: string;
@@ -26,6 +31,22 @@ export interface Check<T = unknown> {
   name: string;
   supportedFrameworks?: readonly string[];
   run(projectPath: string): Promise<CheckResult<T>>;
+}
+
+export interface ScanCoverage {
+  applicableScanners: number;
+  executedSuccessfully: number;
+  skipped: number;
+  errors: number;
+  notApplicable: number;
+  coveragePercent: number;
+}
+
+export interface CurrentQualityGate {
+  passed: boolean;
+  reasons: string[];
+  failingChecks: string[];
+  warningChecks?: string[];
 }
 
 export interface AuditReport {
@@ -44,6 +65,8 @@ export interface AuditReport {
   finishedAt: string;
   duration: number;
   overallScore: number;
+  coverage?: ScanCoverage;
+  currentQualityGate?: CurrentQualityGate;
   results: CheckResult[];
   baseline?: BaselineComparison;
   history?: HistoryTrend;
@@ -74,6 +97,49 @@ export interface HistoryTrend {
   issueDelta?: number;
 }
 
+export interface FingerprintedIssue {
+  id: string;
+  checkName: string;
+  category?: string;
+  type?: string;
+  message: string;
+  route?: string;
+  url?: string;
+  file?: string;
+  line?: number;
+  selector?: string;
+}
+
+export interface CategoryScoreComparison {
+  category: string;
+  currentScore: number;
+  previousScore: number;
+  delta: number;
+  status: "PASSED" | "REGRESSED" | "IMPROVED" | "UNCHANGED";
+}
+
+export interface RegressionQualityGate {
+  passed: boolean;
+  scoreRegressed: boolean;
+  newIssuesCount: number;
+  regressedChecksCount: number;
+  reasons: string[];
+}
+
+export interface CategorizedIssues {
+  newIssues: FingerprintedIssue[];
+  fixedIssues: FingerprintedIssue[];
+  existingIssues: FingerprintedIssue[];
+  regressedChecks: {
+    checkName: string;
+    previousScore: number;
+    currentScore: number;
+    scoreDelta: number;
+    previousStatus: CheckStatus;
+    currentStatus: CheckStatus;
+  }[];
+}
+
 export interface BaselineComparison {
   baselinePath?: string;
   currentRun: string;
@@ -88,6 +154,9 @@ export interface BaselineComparison {
     previous: number;
     delta: number;
   };
+  qualityGate: RegressionQualityGate;
+  categoryScores: CategoryScoreComparison[];
+  categorizedIssues: CategorizedIssues;
   checks: BaselineCheckComparison[];
 }
 

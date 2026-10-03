@@ -74,6 +74,13 @@ function normalizeConfig(value: unknown): Partial<QaEngineOptions> {
     config.auth = source.auth as import("./auth.js").AuthConfig;
   }
 
+  if (Array.isArray(source.flows)) {
+    config.flows = source.flows.filter(
+      (item): item is import("../checks/e2e.js").E2EUserFlow =>
+        Boolean(item && typeof item === "object" && typeof (item as Record<string, unknown>).name === "string" && Array.isArray((item as Record<string, unknown>).steps))
+    );
+  }
+
   return config;
 }
 

@@ -12,11 +12,16 @@ interface LighthousePage {
 }
 
 function concreteRoutes(routes: string[]): string[] {
-  return routes.filter((route) => !/[\[\]:*]/.test(route));
+  const filtered = routes.filter((route) => !/[\[\]:*]/.test(route));
+  if (filtered.length === 0) return ["/"];
+  if (!filtered.includes("/")) return ["/", ...filtered];
+  return filtered;
 }
+
 function score(value: number | null | undefined): number {
   return Math.round((value ?? 0) * 100);
 }
+
 function getAuditRoutes(routes: string[], fullAudit = false): string[] {
   const pages = concreteRoutes(routes);
 
@@ -40,36 +45,75 @@ function getAuditRoutes(routes: string[], fullAudit = false): string[] {
 }
 
 export class LighthouseCheck implements Check<LighthousePage[]> {
-  readonly name = "Lighthouse";
+  readonly name = "Lighthouse Performance";
+
   constructor(
-    private readonly baseUrl: string,
-    private readonly routes: string[],
+    private readonly baseUrl?: string,
+    private readonly routes: string[] = [],
     private readonly fullAudit = false,
   ) {}
 
   async run(_projectPath: string): Promise<CheckResult<LighthousePage[]>> {
     const started = performance.now();
+
+    if (!this.baseUrl) {
+      return {
+        name: this.name,
+        status: "SKIPPED",
+        score: null,
+        message: "No runtime target available for Lighthouse audit",
+        skipReason: "No runtime target available",
+        duration: Math.round(performance.now() - started),
+        pagesAttempted: 0,
+        pagesCompleted: 0,
+      };
+    }
+
+    const auditRoutes = getAuditRoutes(this.routes, this.fullAudit);
+    if (!auditRoutes || auditRoutes.length === 0) {
+      return {
+        name: this.name,
+        status: "SKIPPED",
+        score: null,
+        message: "No routes available for Lighthouse audit",
+        skipReason: "No routes available",
+        duration: Math.round(performance.now() - started),
+        pagesAttempted: 0,
+        pagesCompleted: 0,
+      };
+    }
+
     let chrome: Awaited<ReturnType<typeof launch>> | undefined;
     try {
-      chrome = await launch({
-        chromeFlags: ["--headless", "--no-sandbox", "--disable-gpu"],
-      });
+      try {
+        chrome = await launch({
+          chromeFlags: ["--headless", "--no-sandbox", "--disable-gpu"],
+        });
+      } catch (launchError) {
+        return {
+          name: this.name,
+          status: "ERROR",
+          score: null,
+          message: `Chrome launch failed: ${launchError instanceof Error ? launchError.message : String(launchError)}`,
+          errorReason: launchError instanceof Error ? launchError.message : String(launchError),
+          duration: Math.round(performance.now() - started),
+          pagesAttempted: auditRoutes.length,
+          pagesCompleted: 0,
+        };
+      }
+
       const pages: LighthousePage[] = [];
       const skipped: string[] = [];
 
-      for (const route of getAuditRoutes(this.routes, this.fullAudit)) {
+      for (const route of auditRoutes) {
         try {
-          const result = await lighthouse(new URL(route, this.baseUrl).href, {
+          const targetUrl = new URL(route, this.baseUrl).href;
+          const result = await lighthouse(targetUrl, {
             port: chrome.port,
             output: "json",
             logLevel: "error",
             maxWaitForLoad: 20_000,
-            onlyCategories: [
-              "performance",
-              "accessibility",
-              "seo",
-              "best-practices",
-            ],
+            onlyCategories: ["performance", "accessibility", "seo", "best-practices"],
           });
 
           if (!result) continue;
@@ -81,9 +125,7 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
             performance: score(result.lhr.categories.performance?.score),
             accessibility: score(result.lhr.categories.accessibility?.score),
             seo: score(result.lhr.categories.seo?.score),
-            bestPractices: score(
-              result.lhr.categories["best-practices"]?.score,
-            ),
+            bestPractices: score(result.lhr.categories["best-practices"]?.score),
             metrics: {
               CLS: audits["cumulative-layout-shift"]?.numericValue,
               LCP: audits["largest-contentful-paint"]?.numericValue,
@@ -97,44 +139,63 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
         }
       }
 
-      if (skipped.length) {
-        console.log(`⚠ Lighthouse skipped ${skipped.length} page(s)`);
-      }
-      if (!pages.length && skipped.length) {
+      if (pages.length === 0) {
         return {
           name: this.name,
-          status: "SKIPPED",
-          message: `Lighthouse skipped all ${skipped.length} page(s)`,
-          duration: performance.now() - started,
+          status: skipped.length > 0 ? "ERROR" : "SKIPPED",
+          score: null,
+          message: `Lighthouse failed on all ${skipped.length} page(s)`,
+          errorReason: `All ${skipped.length} page(s) failed Lighthouse execution`,
+          duration: Math.round(performance.now() - started),
+          pagesAttempted: auditRoutes.length,
+          pagesCompleted: 0,
           data: [],
         };
       }
-      const overall = pages.length
-        ? Math.round(
-            pages.reduce((sum, page) => sum + page.performance, 0) /
-              pages.length,
-          )
-        : 0;
+
+      const performanceAvg = Math.round(pages.reduce((sum, p) => sum + p.performance, 0) / pages.length);
+      const accessibilityAvg = Math.round(pages.reduce((sum, p) => sum + p.accessibility, 0) / pages.length);
+      const bestPracticesAvg = Math.round(pages.reduce((sum, p) => sum + p.bestPractices, 0) / pages.length);
+      const seoAvg = Math.round(pages.reduce((sum, p) => sum + p.seo, 0) / pages.length);
+
+      const status = performanceAvg >= 90 ? "PASS" : performanceAvg >= 50 ? "WARNING" : "FAIL";
+
       return {
         name: this.name,
-        status: overall >= 90 ? "PASS" : overall >= 50 ? "WARNING" : "FAIL",
-        score: overall,
-        message: `${pages.length} pages audited`,
-        duration: performance.now() - started,
+        status,
+        score: performanceAvg,
+        message: `${pages.length}/${auditRoutes.length} page(s) audited — Performance: ${performanceAvg} | Accessibility: ${accessibilityAvg} | Best Practices: ${bestPracticesAvg} | SEO: ${seoAvg}`,
+        duration: Math.round(performance.now() - started),
+        pagesDiscovered: this.routes.length,
+        pagesAttempted: auditRoutes.length,
+        pagesCompleted: pages.length,
+        metadata: {
+          metric: "Lighthouse Performance",
+          categoryScores: {
+            performance: performanceAvg,
+            accessibility: accessibilityAvg,
+            bestPractices: bestPracticesAvg,
+            seo: seoAvg,
+          },
+        },
         data: pages,
       };
     } catch (error) {
       return {
         name: this.name,
-        status: "SKIPPED",
+        status: "ERROR",
+        score: null,
         message: error instanceof Error ? error.message : String(error),
-        duration: performance.now() - started,
+        errorReason: error instanceof Error ? error.message : String(error),
+        duration: Math.round(performance.now() - started),
+        pagesAttempted: auditRoutes.length,
+        pagesCompleted: 0,
       };
     } finally {
       try {
         await chrome?.kill();
       } catch {
-        // Cleanup should never hide the Lighthouse result.
+        // Cleanup should never hide Lighthouse result.
       }
     }
   }

@@ -4,7 +4,7 @@ import { detectProjectFramework } from "../framework.js";
 import { PipelineFactory } from "../pipeline/factory.js";
 import { PipelineRuntime } from "../pipeline/runtime.js";
 import { logger } from "./logger.js";
-import { calculateOverallScore, generateReports } from "./report.js";
+import { calculateOverallScore, calculateScanCoverage, evaluateCurrentQualityGate, generateReports } from "./report.js";
 import type { AuditReport, CheckResult } from "../types/result.js";
 import { compareWithBaseline, readBaselineReport } from "../baseline/compare.js";
 import { createCheckRegistry } from "../checks/registry.js";
@@ -14,6 +14,7 @@ import type { QaProfile } from "./profile.js";
 import { createHistoryTrend, readHistory, writeHistorySnapshot } from "../history.js";
 
 import { ApiTestingCheck, type ApiTestCase } from "../checks/api.js";
+import { E2EFlowTestingCheck, type E2EUserFlow } from "../checks/e2e.js";
 import type { AuthConfig } from "./auth.js";
 
 export interface QaEngineOptions {
@@ -24,6 +25,8 @@ export interface QaEngineOptions {
   markdown?: boolean;
   pdf?: boolean;
   output?: string;
+  url?: string;
+  baseUrl?: string;
   failOn?: "warning" | "error" | "none";
   minScore?: number;
   includeRoutes?: string[];
@@ -35,6 +38,7 @@ export interface QaEngineOptions {
   baselineComparison?: boolean;
   apiTestCases?: ApiTestCase[];
   auth?: AuthConfig;
+  flows?: E2EUserFlow[];
 }
 
 async function readPackageJson(projectPath: string): Promise<Record<string, unknown> | undefined> {
@@ -106,6 +110,9 @@ export async function runQaEngine(
     if (options.apiTestCases && options.apiTestCases.length > 0) {
       rawChecks.push(new ApiTestingCheck(options.apiTestCases));
     }
+    if (options.flows && options.flows.length > 0) {
+      rawChecks.push(new E2EFlowTestingCheck(options.flows, await runtime.baseUrl(), undefined, reportDir));
+    }
     const checks = rawChecks.map(toQACheck);
   const registry = createCheckRegistry(checks);
   const executionPlan = registry.getAll();
@@ -124,6 +131,8 @@ export async function runQaEngine(
   const baseUrl = await runtime.baseUrl();
   const duration = performance.now() - started;
   const overallScore = calculateOverallScore(results);
+  const coverage = calculateScanCoverage(results);
+  const currentQualityGate = evaluateCurrentQualityGate(results, overallScore, options);
   const report: AuditReport = {
     version: 2,
     projectPath,
@@ -133,10 +142,10 @@ export async function runQaEngine(
     buildTool: detection.buildTool,
     pipeline: pipeline.framework,
     checksExecuted: results
-      .filter((result) => result.status !== "SKIPPED")
+      .filter((result) => result.status === "PASS" || result.status === "FAIL" || result.status === "WARNING")
       .map((result) => result.name),
     checksSkipped: results
-      .filter((result) => result.status === "SKIPPED")
+      .filter((result) => result.status === "SKIPPED" || result.status === "ERROR" || result.status === "NOT_APPLICABLE")
       .map((result) => `${result.name}${result.message ? ` (${result.message})` : ""}`),
     baseUrl,
     routes,
@@ -144,6 +153,8 @@ export async function runQaEngine(
     finishedAt: new Date().toISOString(),
     duration,
     overallScore,
+    coverage,
+    currentQualityGate,
     results,
   };
   report.baseline = compareWithBaseline(report, baselineReport, baselinePath);
@@ -169,6 +180,6 @@ if (options.html !== false || options.json !== false || options.pdf !== false) {
   if (options.history !== false) {
     await writeHistorySnapshot(report, historyDir, options.historyLimit ?? 30);
   }
-  logger.footer(overallScore, outputs.html, report.baseline);
+  logger.footer(overallScore, outputs.html, report.baseline, report);
   return report;
 }

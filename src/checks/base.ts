@@ -5,7 +5,7 @@ export type AuditProvider = () => Promise<BrowserAudit>;
 
 export abstract class BrowserCheck<T = unknown> implements Check<T> {
   abstract readonly name: string;
-  constructor(protected readonly audit: AuditProvider) {}
+  constructor(protected readonly audit: AuditProvider = async () => null as any) {}
   protected abstract evaluate(audit: BrowserAudit): Omit<CheckResult<T>, "name" | "duration"> | Promise<Omit<CheckResult<T>, "name" | "duration">>;
   async run(_projectPath: string): Promise<CheckResult<T>> {
     const started = performance.now();

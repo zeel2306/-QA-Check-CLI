@@ -32,7 +32,7 @@ type CodeQualityData = {
   };
 };
 
-const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".dart"]);
+const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".dart", ".html"]);
 const IGNORED_DIRECTORIES = new Set([
   ".git",
   ".next",
@@ -287,10 +287,12 @@ export class CodeQualityInsightsCheck implements Check<CodeQualityData> {
       metrics: issueCounts,
     };
 
+    const status = issues.length === 0 ? "PASS" : score >= 70 ? "WARNING" : "FAIL";
+
     return {
       name: this.name,
       category: "code-quality",
-      status: score >= 90 ? "PASS" : score >= 70 ? "WARNING" : "FAIL",
+      status,
       score,
       message: issues.length
         ? `${issues.length} code quality signal(s) found across ${files.length} file(s)`

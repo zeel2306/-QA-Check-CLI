@@ -119,7 +119,17 @@ async function crawlFileBasedPages(projectPath: string): Promise<string[]> {
     .map((file) => file.replace(/\.[^.]+$/, "").replace(/(?:^|\/)index$/, ""));
 }
 
+/** Discovers static HTML pages in an HTML project. */
+async function crawlHtmlPages(projectPath: string): Promise<string[]> {
+  const files = await findFiles(projectPath, ["**/*.html"]);
+  return files
+    .map(toPosixPath)
+    .filter((file) => !file.startsWith("node_modules/") && !file.startsWith("reports/") && !file.startsWith("dist/") && !file.startsWith("build/") && !file.startsWith("coverage/"))
+    .map((file) => (file === "index.html" ? "/" : file.startsWith("/") ? file : `/${file}`));
+}
+
 const STRATEGIES: Readonly<Record<string, CrawlerStrategy>> = {
+  HTML: crawlHtmlPages,
   "Next.js": crawlNext,
   React: crawlDeclaredRoutes,
   "React + Vite": crawlDeclaredRoutes,

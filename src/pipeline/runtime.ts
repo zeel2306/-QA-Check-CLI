@@ -61,7 +61,8 @@ export class PipelineRuntime {
   }
 
   async server(): Promise<LocalServer> {
-    this.serverPromise ??= startLocalServer(this.projectPath);
+    const customUrl = this.options.url || this.options.baseUrl;
+    this.serverPromise ??= startLocalServer(this.projectPath, customUrl);
     return this.serverPromise;
   }
 

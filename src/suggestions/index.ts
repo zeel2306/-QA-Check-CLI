@@ -3,6 +3,7 @@ import { accessibilitySuggestions } from "./accessibility.js";
 import { assetSuggestions } from "./assets.js";
 import { codeQualitySuggestions } from "./codeQuality.js";
 import { consoleSuggestions } from "./console.js";
+import { linkSuggestions } from "./links.js";
 import { networkSuggestions } from "./network.js";
 import { performanceSuggestions } from "./performance.js";
 import { responsiveSuggestions } from "./responsive.js";
@@ -19,6 +20,7 @@ const suggestions: SuggestionMap = {
   ...responsiveSuggestions,
   ...networkSuggestions,
   ...assetSuggestions,
+  ...linkSuggestions,
   ...consoleSuggestions,
 };
 
@@ -52,15 +54,6 @@ function fallbackSuggestion(code: string, checkName: string): IssueSuggestion {
   };
 }
 
-function inferImageCode(item: Record<string, unknown>): string | undefined {
-  if (item.alt === undefined || item.alt === "") return "missing-alt";
-  if (typeof item.status === "number" && (item.status === 0 || item.status >= 400)) {
-    return "broken-image";
-  }
-  if (typeof item.bytes === "number" && item.bytes > 1_000_000) return "large-image";
-  return undefined;
-}
-
 function collectCodesFromItem(item: unknown, fallbackCode: string): string[] {
   if (!isRecord(item)) {
     return [fallbackCode];
@@ -68,7 +61,7 @@ function collectCodesFromItem(item: unknown, fallbackCode: string): string[] {
 
   const code =
     item.type ??
-    inferImageCode(item) ??
+    item.code ??
     (typeof item.status === "number" && item.status >= 400 ? "response" : undefined) ??
     fallbackCode;
 
@@ -98,10 +91,12 @@ function collectCodesFromData(data: unknown, fallbackCode: string): string[] {
     if (Array.isArray(value)) {
       const collectionFallback =
         key === "broken"
-          ? "broken-link"
-          : key === "blockedExternal"
-            ? "blocked-external"
-            : fallbackCode;
+          ? "broken-internal-link"
+          : key === "missingAssets"
+            ? "missing-image-asset"
+            : key === "blockedExternal"
+              ? "blocked-external"
+              : fallbackCode;
       codes.push(...value.flatMap((item) => collectCodesFromItem(item, collectionFallback)));
     }
   }
@@ -119,8 +114,8 @@ function fallbackCodeForCheck(checkName: string): string {
   if (normalized.includes("performance")) return "slow-page";
   if (normalized.includes("console")) return "console";
   if (normalized.includes("network")) return "requestfailed";
-  if (normalized.includes("broken-images")) return "broken-image";
-  if (normalized.includes("broken-links")) return "broken-link";
+  if (normalized.includes("broken-images")) return "missing-image-asset";
+  if (normalized.includes("broken-links")) return "broken-internal-link";
 
   return normalized;
 }

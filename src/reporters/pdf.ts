@@ -36,6 +36,8 @@ function statusColor(status: CheckStatus): string {
       return COLORS.skipped;
     case "ERROR":
       return COLORS.fail;
+    case "NOT_APPLICABLE":
+      return COLORS.muted;
   }
 }
 
@@ -171,6 +173,9 @@ function renderCoverPage(doc: PDFKit.PDFDocument, report: AuditReport): void {
   drawMetaRow(doc, "Pipeline", report.pipeline);
   drawMetaRow(doc, "Generated Time", formatDate(report.finishedAt || report.startedAt));
   drawMetaRow(doc, "Duration", formatDuration(report.duration));
+  if (report.coverage) {
+    drawMetaRow(doc, "Scan Coverage", `${report.coverage.coveragePercent}% (${report.coverage.executedSuccessfully}/${report.coverage.applicableScanners} executed)`);
+  }
 
   const scoreY = doc.y + 28;
   const color = scoreColor(report.overallScore);
@@ -212,6 +217,23 @@ function renderSummaryPage(doc: PDFKit.PDFDocument, report: AuditReport): void {
   drawSummaryCard(doc, "FAIL", counts.fail, PAGE.margin + 260, y, COLORS.fail);
   drawSummaryCard(doc, "ERROR", counts.error, PAGE.margin + 390, y, COLORS.fail);
   drawSummaryCard(doc, "SKIPPED", counts.skipped, PAGE.margin, y + 104, COLORS.skipped);
+
+  doc.y = y + 210;
+  addSectionTitle(doc, "Quality Gates");
+  if (report.currentQualityGate) {
+    drawMetaRow(
+      doc,
+      "Current Quality Gate",
+      report.currentQualityGate.passed ? "PASSED ✅" : "FAILED ❌"
+    );
+  }
+  if (report.baseline?.qualityGate) {
+    drawMetaRow(
+      doc,
+      "Regression Gate",
+      report.baseline.qualityGate.passed ? "PASSED ✅" : "FAILED ❌"
+    );
+  }
 }
 
 function renderCheckResultsPage(doc: PDFKit.PDFDocument, report: AuditReport): void {

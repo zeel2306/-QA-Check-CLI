@@ -22,6 +22,18 @@ const examples = [
     description: "Run REST API endpoint tests defined in qa-check.config.json.",
   },
   {
+    command: "qa-check test",
+    description: "Run declarative E2E user flow tests defined in qa-check.config.json.",
+  },
+  {
+    command: "qa-check flow [file.yml|file.json|dir]",
+    description: "Run declarative E2E user flow tests from a JSON or YAML flow file.",
+  },
+  {
+    command: "qa-check compare [baseline.json] [current.json]",
+    description: "Compare two QA scan report JSON files and evaluate Quality Gate regressions.",
+  },
+  {
     command: "qa-check fix",
     description: "Automatically fix code quality issues, debug statements, and HTML accessibility/meta tags.",
   },

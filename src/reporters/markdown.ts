@@ -6,21 +6,43 @@ function statusIcon(status: CheckResult["status"]): string {
   if (status === "PASS") return "✅";
   if (status === "WARNING") return "⚠️";
   if (status === "SKIPPED") return "⏭️";
+  if (status === "NOT_APPLICABLE") return "➖";
   return "❌";
 }
 
 function countByStatus(report: AuditReport): Record<CheckResult["status"], number> {
   return report.results.reduce(
     (counts, result) => {
-      counts[result.status] += 1;
+      counts[result.status] = (counts[result.status] || 0) + 1;
       return counts;
     },
-    { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, SKIPPED: 0 },
+    { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, SKIPPED: 0, NOT_APPLICABLE: 0 },
   );
 }
 
 function escapeCell(value: unknown): string {
   return String(value ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
+function renderQualityGates(report: AuditReport): string {
+  const lines: string[] = ["## Quality Gates", ""];
+
+  if (report.currentQualityGate) {
+    lines.push(`- Current Quality Gate: ${report.currentQualityGate.passed ? "PASSED ✅" : "FAILED ❌"}`);
+    for (const reason of report.currentQualityGate.reasons) {
+      lines.push(`  - ${reason}`);
+    }
+  }
+
+  if (report.baseline?.qualityGate) {
+    lines.push(`- Regression Gate: ${report.baseline.qualityGate.passed ? "PASSED ✅" : "FAILED ❌"}`);
+    for (const reason of report.baseline.qualityGate.reasons) {
+      lines.push(`  - ${reason}`);
+    }
+  }
+
+  lines.push("");
+  return lines.join("\n");
 }
 
 function renderBaseline(report: AuditReport): string {
@@ -30,7 +52,7 @@ function renderBaseline(report: AuditReport): string {
   const issueDelta = report.baseline.totalIssues.delta;
 
   return [
-    "## Baseline",
+    "## Baseline Comparison",
     "",
     `- Previous score: ${report.baseline.overallScore.previous}/100`,
     `- Current score: ${report.baseline.overallScore.current}/100`,
@@ -63,7 +85,7 @@ function renderChecks(report: AuditReport): string {
     [
       `${statusIcon(result.status)} ${escapeCell(result.status)}`,
       escapeCell(result.name),
-      escapeCell(result.score === undefined ? "-" : `${result.score}/100`),
+      escapeCell(result.score === undefined || result.score === null ? "-" : `${result.score}/100`),
       escapeCell(result.message ?? "-"),
     ].join(" | "),
   );
@@ -80,6 +102,7 @@ function renderChecks(report: AuditReport): string {
 
 function renderMarkdown(report: AuditReport): string {
   const counts = countByStatus(report);
+  const cov = report.coverage;
 
   return [
     "# QA Check Report",
@@ -89,20 +112,22 @@ function renderMarkdown(report: AuditReport): string {
     "## Summary",
     "",
     `- Overall score: ${report.overallScore}/100`,
+    cov ? `- Scan Coverage: ${cov.coveragePercent}% (${cov.executedSuccessfully}/${cov.applicableScanners} applicable scanners executed successfully)` : "",
     `- Framework: ${report.framework}`,
     `- Pipeline: ${report.pipeline}`,
     `- Project: ${report.projectPath}`,
     `- Routes: ${report.routes.length}`,
     `- Duration: ${Math.round(report.duration / 1000)}s`,
     "",
-    "| PASS | WARNING | FAIL | ERROR | SKIPPED |",
-    "| ---: | ---: | ---: | ---: | ---: |",
-    `| ${counts.PASS} | ${counts.WARNING} | ${counts.FAIL} | ${counts.ERROR} | ${counts.SKIPPED} |`,
+    "| PASS | WARNING | FAIL | ERROR | SKIPPED | NOT APPLICABLE |",
+    "| ---: | ---: | ---: | ---: | ---: | ---: |",
+    `| ${counts.PASS} | ${counts.WARNING} | ${counts.FAIL} | ${counts.ERROR} | ${counts.SKIPPED} | ${counts.NOT_APPLICABLE} |`,
     "",
+    renderQualityGates(report),
     renderBaseline(report),
     renderHistory(report),
     renderChecks(report),
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 export async function writeMarkdownReport(report: AuditReport, reportDir: string): Promise<string> {
