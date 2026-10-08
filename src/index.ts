@@ -198,6 +198,11 @@ const explicitOptions: QaEngineOptions = {};
         explicitOptions.ci = true;
         break;
 
+      case "--debug":
+        explicitOptions.debug = true;
+        process.env.QA_CHECK_DEBUG = "1";
+        break;
+
       case "--profile": {
         const value = args[++i];
 

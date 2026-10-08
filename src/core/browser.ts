@@ -38,6 +38,7 @@ export interface ImageData {
   status?: number;
   alt?: string;
   bytes?: number;
+  broken?: boolean;
 }
 export interface PerformanceData {
   route: string;
@@ -62,9 +63,9 @@ export interface BrowserAudit {
 
 async function navigate(page: Page, url: string): Promise<void> {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
-  // Allow hydration, fonts, and initial images to settle without waiting for
-  // analytics, polling, or WebSockets to become idle.
-  await page.waitForTimeout(150);
+  // Wait for asynchronous fetch/XHR network requests triggered during React hydration/useEffect
+  await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => undefined);
+  await page.waitForTimeout(300);
 }
 
 async function installLayoutShiftObserver(page: Page): Promise<void> {
@@ -82,8 +83,18 @@ async function installLayoutShiftObserver(page: Page): Promise<void> {
   });
 }
 
-function concreteRoutes(routes: string[]): string[] {
-  return routes.filter((route) => !/[\[\]:*]/.test(route));
+export function concreteRoutes(routes: string[]): string[] {
+  return routes
+    .map((route) => route.replace(/^[A-Z]+\s+/, ""))
+    .filter(
+      (route) =>
+        !/[\[\]:*]/.test(route) &&
+        !route.startsWith("/api/") &&
+        !route.startsWith("api/") &&
+        !route.startsWith("src/") &&
+        !route.startsWith("/src/") &&
+        !/\.(tsx?|jsx?)$/i.test(route)
+    );
 }
 
 function safeName(route: string): string {
@@ -254,6 +265,7 @@ async function inspectPage(
     const images = [...document.images].map((img) => ({
       url: img.currentSrc || img.src,
       alt: img.getAttribute("alt") ?? undefined,
+      broken: img.complete && img.naturalWidth === 0 && Boolean(img.currentSrc || img.src) && !(img.currentSrc || img.src).startsWith("data:"),
     }));
     const navigation = performance.getEntriesByType("navigation")[0] as
       | PerformanceNavigationTiming
@@ -384,18 +396,29 @@ export async function runBrowserAudit(
 
             page.on("console", (message) => {
               if (message.type() === "error") {
+                const text = message.text();
+                let type = "console-error";
+                if (text.includes("Failed to load resource") || text.includes("404")) {
+                  type = "resource-load-error";
+                } else if (text.includes("Warning:") || text.includes("React will")) {
+                  type = "framework-warning";
+                }
                 audit.console.push({
                   route,
-                  type: "console-error",
-                  message: message.text(),
+                  type,
+                  message: text,
                 });
               }
             });
 
             page.on("pageerror", (error) => {
+              let type = "javascript-exception";
+              if (error.message.includes("Unhandled Promise Rejection") || error.name === "UnhandledRejection") {
+                type = "unhandled-rejection";
+              }
               audit.console.push({
                 route,
-                type: "javascript-exception",
+                type,
                 message: error.message,
               });
             });
@@ -405,11 +428,15 @@ export async function runBrowserAudit(
                 return;
               }
 
+              const failureReason = request.failure()?.errorText ?? "Request failed";
               audit.network.push({
                 route,
                 type: "failed-request",
-                message: request.failure()?.errorText ?? "Request failed",
+                message: `${request.method()} ${request.url()} - ${failureReason}`,
                 url: request.url(),
+                method: request.method(),
+                resourceType: request.resourceType(),
+                reason: failureReason,
               });
             });
 
@@ -426,21 +453,48 @@ export async function runBrowserAudit(
                   type: "slow-request",
                   message: `${Math.round(timing.responseEnd)}ms response`,
                   url: request.url(),
+                  method: request.method(),
+                  resourceType: request.resourceType(),
                 });
               }
             });
 
             page.on("response", (response) => {
-              if (response.request().resourceType() === "image") {
-                audit.imageResponses[response.url()] = response.status();
+              const url = response.url();
+              const req = response.request();
+              if (req.resourceType() === "image") {
+                audit.imageResponses[url] = response.status();
               }
 
-              if (response.status() >= 400 && !shouldIgnore(response.url())) {
+              if (shouldIgnore(url)) {
+                return;
+              }
+
+              const status = response.status();
+              const contentType = response.headers()["content-type"] || "";
+              const isApiRoute = url.includes("/api/") || req.resourceType() === "fetch" || req.resourceType() === "xhr";
+
+              if (status >= 400) {
                 audit.network.push({
                   route,
-                  type: `http-${response.status()}`,
-                  message: `HTTP ${response.status()}`,
-                  url: response.url(),
+                  type: `http-${status}`,
+                  message: `HTTP ${status} ${response.statusText()}`.trim(),
+                  url,
+                  method: req.method(),
+                  status,
+                  statusText: response.statusText(),
+                  resourceType: req.resourceType(),
+                });
+              } else if (status === 200 && isApiRoute && url.includes("/api/") && contentType.includes("text/html")) {
+                audit.network.push({
+                  route,
+                  type: "http-404",
+                  message: `API endpoint returned HTML page (SPA fallback 404)`,
+                  url,
+                  method: req.method(),
+                  status: 404,
+                  statusText: "Not Found (SPA Fallback)",
+                  resourceType: req.resourceType(),
                 });
               }
             });

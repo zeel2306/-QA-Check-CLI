@@ -2,11 +2,13 @@ import fs from "fs/promises";
 import path from "path";
 import { detectProjectFramework } from "../framework.js";
 import { PipelineFactory } from "../pipeline/factory.js";
-import { PipelineRuntime } from "../pipeline/runtime.js";
+import { LazyApiTestingCheck, PipelineRuntime } from "../pipeline/runtime.js";
 import { logger } from "./logger.js";
 import { calculateOverallScore, calculateScanCoverage, evaluateCurrentQualityGate, generateReports } from "./report.js";
 import type { AuditReport, CheckResult } from "../types/result.js";
 import { compareWithBaseline, readBaselineReport } from "../baseline/compare.js";
+import { correlateCanonicalDefects } from "../core/canonical.js";
+import { sanitizeAnsi } from "../utils/ansi.js";
 import { createCheckRegistry } from "../checks/registry.js";
 import type { QAContext } from "./context.js";
 import { executeCheck, toQACheck } from "./executor.js";
@@ -20,6 +22,7 @@ import type { AuthConfig } from "./auth.js";
 export interface QaEngineOptions {
   profile?: QaProfile;
   ci?: boolean;
+  debug?: boolean;
   html?: boolean;
   json?: boolean;
   markdown?: boolean;
@@ -108,7 +111,9 @@ export async function runQaEngine(
   try {
     const rawChecks = pipeline.checks();
     if (options.apiTestCases && options.apiTestCases.length > 0) {
-      rawChecks.push(new ApiTestingCheck(options.apiTestCases));
+      if (!rawChecks.some((c) => c.name === "API Testing")) {
+        rawChecks.push(new LazyApiTestingCheck(runtime));
+      }
     }
     if (options.flows && options.flows.length > 0) {
       rawChecks.push(new E2EFlowTestingCheck(options.flows, await runtime.baseUrl(), undefined, reportDir));
@@ -133,6 +138,18 @@ export async function runQaEngine(
   const overallScore = calculateOverallScore(results);
   const coverage = calculateScanCoverage(results);
   const currentQualityGate = evaluateCurrentQualityGate(results, overallScore, options);
+  const canonicalDefects = correlateCanonicalDefects(results);
+  const rawObservations = results.reduce((sum, r) => {
+    if (r.status === "PASS" || r.status === "SKIPPED" || r.status === "NOT_APPLICABLE") return sum;
+    const data = r.data as any;
+    if (data && typeof data.failed === "number") return sum + data.failed;
+    if (data && Array.isArray(data.issues)) return sum + data.issues.length;
+    if (data && typeof data.totalIssues === "number") return sum + data.totalIssues;
+    if (Array.isArray(data)) return sum + data.length;
+    return sum;
+  }, 0);
+  const uniqueDefects = canonicalDefects.length;
+
   const report: AuditReport = {
     version: 2,
     projectPath,
@@ -142,10 +159,13 @@ export async function runQaEngine(
     buildTool: detection.buildTool,
     pipeline: pipeline.framework,
     checksExecuted: results
-      .filter((result) => result.status === "PASS" || result.status === "FAIL" || result.status === "WARNING")
+      .filter((result) => result.status === "PASS" || result.status === "FAIL" || result.status === "WARNING" || result.status === "ERROR")
       .map((result) => result.name),
     checksSkipped: results
-      .filter((result) => result.status === "SKIPPED" || result.status === "ERROR" || result.status === "NOT_APPLICABLE")
+      .filter((result) => result.status === "SKIPPED")
+      .map((result) => `${result.name}${result.message ? ` (${result.message})` : ""}`),
+    checksNotApplicable: results
+      .filter((result) => result.status === "NOT_APPLICABLE")
       .map((result) => `${result.name}${result.message ? ` (${result.message})` : ""}`),
     baseUrl,
     routes,
@@ -155,12 +175,16 @@ export async function runQaEngine(
     overallScore,
     coverage,
     currentQualityGate,
+    rawObservations,
+    uniqueDefects,
+    canonicalDefects,
     results,
   };
-  report.baseline = compareWithBaseline(report, baselineReport, baselinePath);
+  const sanitizedReport = sanitizeAnsi(report);
+  sanitizedReport.baseline = compareWithBaseline(sanitizedReport, baselineReport, baselinePath);
   const previousHistory = options.history === false ? [] : await readHistory(historyDir);
   if (options.history !== false) {
-    report.history = createHistoryTrend(report, previousHistory, historyDir);
+    sanitizedReport.history = createHistoryTrend(sanitizedReport, previousHistory, historyDir);
   }
   let outputs = {
   html: "",
@@ -170,7 +194,7 @@ export async function runQaEngine(
 };
 
 if (options.html !== false || options.json !== false || options.pdf !== false) {
-  outputs = await generateReports(report, reportDir, {
+  outputs = await generateReports(sanitizedReport, reportDir, {
     html: options.html,
     json: options.json,
     markdown: options.markdown,
@@ -178,8 +202,8 @@ if (options.html !== false || options.json !== false || options.pdf !== false) {
   });
 }
   if (options.history !== false) {
-    await writeHistorySnapshot(report, historyDir, options.historyLimit ?? 30);
+    await writeHistorySnapshot(sanitizedReport, historyDir, options.historyLimit ?? 30);
   }
-  logger.footer(overallScore, outputs.html, report.baseline, report);
-  return report;
+  logger.footer(overallScore, outputs.html, sanitizedReport.baseline, sanitizedReport);
+  return sanitizedReport;
 }

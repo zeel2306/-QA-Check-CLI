@@ -44,8 +44,16 @@ function severityForStatus(status: CheckResult["status"]): IssueSeverity {
   return "info";
 }
 
-function inferImageCode(record: Record<string, unknown>): string | undefined {
-  if (record.alt === undefined || record.alt === "") return "missing-alt";
+function inferImageCode(record: Record<string, unknown>, category?: string, checkName?: string): string | undefined {
+  const isImageContext =
+    category === "assets" ||
+    Boolean(checkName && checkName.toLowerCase().includes("image")) ||
+    "alt" in record ||
+    "src" in record;
+
+  if (!isImageContext) return undefined;
+
+  if ("alt" in record && (record.alt === undefined || record.alt === "")) return "missing-alt";
   if (typeof record.status === "number" && (record.status === 0 || record.status >= 400)) {
     return "broken-image";
   }
@@ -55,14 +63,23 @@ function inferImageCode(record: Record<string, unknown>): string | undefined {
 
 function legacyIssueItems(result: CheckResult): unknown[] {
   const data = result.data;
+  let items: unknown[] = [];
 
-  if (Array.isArray(data)) return data;
-  if (!isRecord(data)) return [];
-  if (Array.isArray(data.issues)) return data.issues;
+  if (Array.isArray(data)) {
+    items = data;
+  } else if (isRecord(data)) {
+    if (Array.isArray(data.issues)) {
+      items = data.issues;
+    } else {
+      items = Object.entries(data)
+        .filter(([key]) => !["screenshots", "skippedRoutes", "grouped"].includes(key))
+        .flatMap(([, value]) => (Array.isArray(value) ? value : []));
+    }
+  }
 
-  return Object.entries(data)
-    .filter(([key]) => !["screenshots", "skippedRoutes", "grouped"].includes(key))
-    .flatMap(([, value]) => (Array.isArray(value) ? value : []));
+  return items.filter(
+    (item) => !isRecord(item) || (item.status !== "PASS" && item.status !== "OK" && item.status !== "NOT_APPLICABLE"),
+  );
 }
 
 function issueFromItem(
@@ -72,7 +89,7 @@ function issueFromItem(
 ): QAIssue {
   const category = result.category ?? inferCheckCategory(result.name);
   const record = isRecord(item) ? item : {};
-  const code = normalizeCode(record.type ?? inferImageCode(record) ?? result.name);
+  const code = normalizeCode(record.code ?? record.ruleId ?? record.type ?? inferImageCode(record, category, result.name) ?? result.name);
   const message = String(record.message ?? result.message ?? titleFromCode(code));
   const file = typeof record.file === "string" ? record.file : undefined;
   const line = typeof record.line === "number" ? record.line : undefined;

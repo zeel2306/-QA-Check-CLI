@@ -26,13 +26,15 @@ export async function runCommand(
       shell: false,
     });
 
-    console.log("========== DEBUG ==========");
-    console.log("Command:", command, args.join(" "));
-    console.log("CWD:", cwd);
-    console.log("Exit Code:", result.exitCode);
-    console.log("STDOUT:\n", result.stdout);
-    console.log("STDERR:\n", result.stderr);
-    console.log("===========================");
+    if (process.env.QA_CHECK_DEBUG === "1" || process.env.DEBUG === "true" || process.env.DEBUG === "1") {
+      console.log("========== DEBUG ==========");
+      console.log("Command:", command, args.join(" "));
+      console.log("CWD:", cwd);
+      console.log("Exit Code:", result.exitCode);
+      console.log("STDOUT:\n", result.stdout);
+      console.log("STDERR:\n", result.stderr);
+      console.log("===========================");
+    }
 
     return {
       success: result.exitCode === 0,

@@ -44,9 +44,14 @@ export interface ScanCoverage {
 
 export interface CurrentQualityGate {
   passed: boolean;
+  status?: "PASSED" | "FAILED" | "INCOMPLETE";
+  confidence?: "FULL" | "PARTIAL";
+  confidencePercent?: number;
   reasons: string[];
   failingChecks: string[];
   warningChecks?: string[];
+  skippedChecks?: string[];
+  erroredChecks?: string[];
 }
 
 export interface AuditReport {
@@ -59,6 +64,7 @@ export interface AuditReport {
   pipeline: string;
   checksExecuted: string[];
   checksSkipped: string[];
+  checksNotApplicable?: string[];
   baseUrl?: string;
   routes: string[];
   startedAt: string;
@@ -67,6 +73,9 @@ export interface AuditReport {
   overallScore: number;
   coverage?: ScanCoverage;
   currentQualityGate?: CurrentQualityGate;
+  rawObservations?: number;
+  uniqueDefects?: number;
+  canonicalDefects?: any[];
   results: CheckResult[];
   baseline?: BaselineComparison;
   history?: HistoryTrend;
@@ -105,6 +114,8 @@ export interface FingerprintedIssue {
   message: string;
   route?: string;
   url?: string;
+  target?: string;
+  method?: string;
   file?: string;
   line?: number;
   selector?: string;
@@ -115,7 +126,8 @@ export interface CategoryScoreComparison {
   currentScore: number;
   previousScore: number;
   delta: number;
-  status: "PASSED" | "REGRESSED" | "IMPROVED" | "UNCHANGED";
+  tolerance?: number;
+  status: "STABLE" | "REGRESSED" | "IMPROVED";
 }
 
 export interface RegressionQualityGate {
@@ -124,6 +136,21 @@ export interface RegressionQualityGate {
   newIssuesCount: number;
   regressedChecksCount: number;
   reasons: string[];
+}
+
+export interface ScannerExecutionChange {
+  checkName: string;
+  previousStatus: CheckStatus;
+  currentStatus: CheckStatus;
+  description: string;
+}
+
+export interface ScannerComparisonState {
+  checkName: string;
+  status: "STABLE" | "IMPROVED" | "REGRESSED" | "UNAVAILABLE";
+  reason?: string;
+  previousStatus?: CheckStatus;
+  currentStatus: CheckStatus;
 }
 
 export interface CategorizedIssues {
@@ -138,6 +165,17 @@ export interface CategorizedIssues {
     previousStatus: CheckStatus;
     currentStatus: CheckStatus;
   }[];
+  scannerExecutionChanges?: ScannerExecutionChange[];
+  scannerComparisonStates?: ScannerComparisonState[];
+}
+
+export interface MetricChangeComparison {
+  name: string;
+  previous: number;
+  current: number;
+  delta: number;
+  tolerance: number;
+  status: "STABLE" | "REGRESSED" | "IMPROVED";
 }
 
 export interface BaselineComparison {
@@ -156,6 +194,7 @@ export interface BaselineComparison {
   };
   qualityGate: RegressionQualityGate;
   categoryScores: CategoryScoreComparison[];
+  metricChanges?: MetricChangeComparison[];
   categorizedIssues: CategorizedIssues;
   checks: BaselineCheckComparison[];
 }
@@ -186,4 +225,9 @@ export interface BrowserIssue {
   message: string;
   selector?: string;
   url?: string;
+  method?: string;
+  status?: number;
+  statusText?: string;
+  resourceType?: string;
+  reason?: string;
 }

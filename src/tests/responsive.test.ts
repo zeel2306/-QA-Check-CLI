@@ -9,10 +9,10 @@ test("ResponsiveCheck static check detects missing viewport meta tag", async () 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "qa-check-responsive-test-"));
 
   try {
-    // Case 1: Empty folder -> SKIPPED
+    // Case 1: Empty folder -> NOT_APPLICABLE
     const check = new ResponsiveCheck();
     const resultEmpty = await check.run(tmpDir);
-    assert.equal(resultEmpty.status, "SKIPPED", "Zero pages audited MUST return SKIPPED");
+    assert.equal(resultEmpty.status, "NOT_APPLICABLE", "Zero pages audited MUST return NOT_APPLICABLE");
 
     // Case 2: Missing viewport tag -> FAIL
     fs.writeFileSync(path.join(tmpDir, "index.html"), "<html><head><title>Test</title></head><body>Hello</body></html>");

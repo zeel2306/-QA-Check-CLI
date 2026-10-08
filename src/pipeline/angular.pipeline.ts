@@ -10,10 +10,15 @@ export class AngularPipeline extends BasePipeline {
       this.eslint("Angular Lint"),
       this.typeScript(),
       this.codeQuality(),
-      this.accessibility(),
+      this.routes(),
       this.responsive(),
+      this.accessibility(),
       this.lighthouse(),
       this.performance(),
+      this.brokenLinks(),
+      this.brokenImages(),
+      this.consoleErrors(),
+      this.networkErrors(),
     ];
   }
 }

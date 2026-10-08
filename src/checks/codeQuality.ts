@@ -32,21 +32,9 @@ type CodeQualityData = {
   };
 };
 
+import { isExcludedDir, isProjectSourceFile } from "../utils/sourcePolicy.js";
+
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".vue", ".dart", ".html"]);
-const IGNORED_DIRECTORIES = new Set([
-  ".git",
-  ".next",
-  ".nuxt",
-  ".svelte-kit",
-  "android",
-  "build",
-  "coverage",
-  "dist",
-  "ios",
-  "node_modules",
-  "reports",
-  "vendor",
-]);
 
 const MAX_FILES = 350;
 const MAX_FILE_BYTES = 350_000;
@@ -73,7 +61,7 @@ function collectSourceFiles(projectPath: string): SourceFile[] {
 
     for (const entry of entries) {
       if (files.length >= MAX_FILES) break;
-      if (entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name)) continue;
+      if (entry.isDirectory() && isExcludedDir(entry.name)) continue;
 
       const absolutePath = path.join(currentPath, entry.name);
 
@@ -83,6 +71,7 @@ function collectSourceFiles(projectPath: string): SourceFile[] {
       }
 
       if (!entry.isFile() || !SOURCE_EXTENSIONS.has(path.extname(entry.name))) continue;
+      if (!isProjectSourceFile(absolutePath, projectPath)) continue;
 
       try {
         if (fs.statSync(absolutePath).size > MAX_FILE_BYTES) continue;
@@ -186,6 +175,54 @@ function findLongFlutterBuildMethods(lines: string[], file: string): CodeQuality
   return issues;
 }
 
+function findReactAndJsIssues(lines: string[], content: string, file: string): CodeQualityIssue[] {
+  const issues: CodeQualityIssue[] = [];
+  const ext = path.extname(file).toLowerCase();
+
+  lines.forEach((line, index) => {
+    // 1. no-alert check
+    if (/\b(window\.)?alert\s*\(/.test(line) && !line.includes("// eslint-disable")) {
+      issues.push({
+        type: "no-alert",
+        message: "Avoid using alert() in production code. Use modal dialogs or toast notifications instead.",
+        file,
+        line: index + 1,
+        sample: line.trim(),
+      });
+    }
+
+    // 2. react-missing-list-key check for JSX/TSX
+    if (([".jsx", ".tsx"].includes(ext) || content.includes("React")) && /\.map\s*\(/.test(line)) {
+      const snippet = lines.slice(index, Math.min(lines.length, index + 5)).join(" ");
+      if (/<[A-Za-z0-9_.]+/i.test(snippet) && !/\bkey\s*=/i.test(snippet)) {
+        issues.push({
+          type: "react-missing-list-key",
+          message: "Array .map() renders JSX elements without a unique key prop.",
+          file,
+          line: index + 1,
+          sample: line.trim(),
+        });
+      }
+    }
+
+    // 3. unhandled fetch check
+    if (/\bfetch\s*\(/.test(line)) {
+      const snippet = lines.slice(Math.max(0, index - 3), Math.min(lines.length, index + 6)).join(" ");
+      if (!/\.catch\s*\(/.test(snippet) && !/try\s*\{/.test(snippet) && !/\bcatch\b/.test(snippet)) {
+        issues.push({
+          type: "unhandled-fetch-error",
+          message: "fetch() request has no error handling (.catch or try/catch block).",
+          file,
+          line: index + 1,
+          sample: line.trim(),
+        });
+      }
+    }
+  });
+
+  return issues;
+}
+
 export class CodeQualityInsightsCheck implements Check<CodeQualityData> {
   readonly name = "Code Quality Insights";
 
@@ -234,6 +271,7 @@ export class CodeQualityInsightsCheck implements Check<CodeQualityData> {
       issues.push(...findDebugStatements(lines, file.relativePath));
       issues.push(...findTodos(lines, file.relativePath));
       issues.push(...findLongFlutterBuildMethods(lines, file.relativePath));
+      issues.push(...findReactAndJsIssues(lines, content, file.relativePath));
 
       lines.forEach((line, index) => {
         const normalized = line.trim().replace(/\s+/g, " ");
@@ -265,6 +303,9 @@ export class CodeQualityInsightsCheck implements Check<CodeQualityData> {
       debugStatements: issues.filter((issue) => issue.type === "debug-statement").length,
       todos: issues.filter((issue) => issue.type === "todo-marker").length,
       longBuildMethods: issues.filter((issue) => issue.type === "long-build-method").length,
+      reactMissingKeys: issues.filter((issue) => issue.type === "react-missing-list-key").length,
+      noAlert: issues.filter((issue) => issue.type === "no-alert").length,
+      unhandledFetch: issues.filter((issue) => issue.type === "unhandled-fetch-error").length,
     };
 
     const score = Math.max(
@@ -274,7 +315,10 @@ export class CodeQualityInsightsCheck implements Check<CodeQualityData> {
         issueCounts.repeatedCode * 5 -
         issueCounts.debugStatements * 3 -
         issueCounts.todos -
-        issueCounts.longBuildMethods * 8,
+        issueCounts.longBuildMethods * 8 -
+        issueCounts.reactMissingKeys * 5 -
+        issueCounts.noAlert * 5 -
+        issueCounts.unhandledFetch * 5,
     );
 
     const data: CodeQualityData = {

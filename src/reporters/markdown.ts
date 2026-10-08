@@ -28,8 +28,17 @@ function renderQualityGates(report: AuditReport): string {
   const lines: string[] = ["## Quality Gates", ""];
 
   if (report.currentQualityGate) {
-    lines.push(`- Current Quality Gate: ${report.currentQualityGate.passed ? "PASSED ✅" : "FAILED ❌"}`);
-    for (const reason of report.currentQualityGate.reasons) {
+    const gate = report.currentQualityGate;
+    const gateStatus = gate.status || (gate.passed ? "PASSED" : "FAILED");
+    const gateText = gateStatus === "PASSED" ? "PASSED ✅" : gateStatus === "INCOMPLETE" ? "INCOMPLETE ⚠️" : "FAILED ❌";
+    lines.push(`- Current Quality Gate: ${gateText}`);
+    const confidence = gate.confidence
+      ? `${gate.confidence} (${gate.confidencePercent}%)`
+      : report.coverage
+      ? `${report.coverage.coveragePercent >= 100 ? "FULL" : "PARTIAL"} (${report.coverage.coveragePercent}%)`
+      : "FULL (100%)";
+    lines.push(`- Score Confidence: ${confidence}`);
+    for (const reason of gate.reasons) {
       lines.push(`  - ${reason}`);
     }
   }

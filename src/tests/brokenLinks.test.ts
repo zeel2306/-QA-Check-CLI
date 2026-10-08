@@ -9,10 +9,10 @@ test("BrokenLinksCheck detects broken relative links, warnings, and SKIPPED stat
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "qa-check-links-test-"));
 
   try {
-    // Case 1: Empty folder -> SKIPPED
+    // Case 1: Empty folder -> NOT_APPLICABLE
     const check = new BrokenLinksCheck();
     const resultEmpty = await check.run(tmpDir);
-    assert.equal(resultEmpty.status, "SKIPPED", "Empty folder should result in SKIPPED status");
+    assert.equal(resultEmpty.status, "NOT_APPLICABLE", "Empty folder should result in NOT_APPLICABLE status");
 
     // Case 2: Folder with valid link + broken link + suspicious hash
     fs.writeFileSync(path.join(tmpDir, "target.html"), "<html><body>Target</body></html>");

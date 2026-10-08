@@ -4,26 +4,32 @@ import type { Check, CheckResult } from "../types/result.js";
 
 interface LighthousePage {
   route: string;
-  performance: number;
-  accessibility: number;
-  seo: number;
-  bestPractices: number;
+  performance: number | null;
+  accessibility: number | null;
+  seo: number | null;
+  bestPractices: number | null;
   metrics: Record<string, number | undefined>;
 }
 
 function concreteRoutes(routes: string[]): string[] {
-  const filtered = routes.filter((route) => !/[\[\]:*]/.test(route));
-  if (filtered.length === 0) return ["/"];
+  const filtered = routes
+    .map((route) => route.replace(/^[A-Z]+\s+/, ""))
+    .filter(
+      (route) => !/[\[\]:*]/.test(route) && !route.startsWith("/api/") && !route.startsWith("api/")
+    );
+  if (filtered.length === 0) return [];
   if (!filtered.includes("/")) return ["/", ...filtered];
   return filtered;
 }
 
-function score(value: number | null | undefined): number {
-  return Math.round((value ?? 0) * 100);
+function score(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || Number.isNaN(value)) return null;
+  return Math.round(value * 100);
 }
 
 function getAuditRoutes(routes: string[], fullAudit = false): string[] {
   const pages = concreteRoutes(routes);
+  if (pages.length === 0) return [];
 
   if (fullAudit) {
     return pages;
@@ -44,8 +50,18 @@ function getAuditRoutes(routes: string[], fullAudit = false): string[] {
   return selected;
 }
 
+export interface RouteDiagnostic {
+  route: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  status: "SUCCESS" | "FAILED" | "TIMED_OUT";
+  error?: string;
+}
+
 export class LighthouseCheck implements Check<LighthousePage[]> {
   readonly name = "Lighthouse Performance";
+  readonly timeoutMs = 180_000; // 3-minute timeout for multi-route audit
 
   constructor(
     private readonly baseUrl?: string,
@@ -69,11 +85,10 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
       };
     }
 
-    const auditRoutes = getAuditRoutes(this.routes, this.fullAudit);
-    if (!auditRoutes || auditRoutes.length === 0) {
+    if (!this.routes || this.routes.length === 0) {
       return {
         name: this.name,
-        status: "SKIPPED",
+        status: "NOT_APPLICABLE",
         score: null,
         message: "No routes available for Lighthouse audit",
         skipReason: "No routes available",
@@ -83,7 +98,23 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
       };
     }
 
+    const auditRoutes = getAuditRoutes(this.routes, this.fullAudit);
+    if (!auditRoutes || auditRoutes.length === 0) {
+      return {
+        name: this.name,
+        status: "NOT_APPLICABLE",
+        score: null,
+        message: "No browser-facing routes available for Lighthouse audit",
+        skipReason: "No browser-facing routes available",
+        duration: Math.round(performance.now() - started),
+        pagesAttempted: 0,
+        pagesCompleted: 0,
+      };
+    }
+
     let chrome: Awaited<ReturnType<typeof launch>> | undefined;
+    const routeDiagnostics: RouteDiagnostic[] = [];
+
     try {
       try {
         chrome = await launch({
@@ -106,9 +137,14 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
       const skipped: string[] = [];
 
       for (const route of auditRoutes) {
+        const routeStart = performance.now();
+        const startedAtIso = new Date().toISOString();
+
         try {
           const targetUrl = new URL(route, this.baseUrl).href;
-          const result = await lighthouse(targetUrl, {
+
+          // Per-route timeout isolation (25s timeout per route)
+          const runRouteLighthouse = lighthouse(targetUrl, {
             port: chrome.port,
             output: "json",
             logLevel: "error",
@@ -116,7 +152,26 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
             onlyCategories: ["performance", "accessibility", "seo", "best-practices"],
           });
 
-          if (!result) continue;
+          const routeTimeout = new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error(`Route ${route} Lighthouse audit timed out`)), 25_000);
+          });
+
+          const result = await Promise.race([runRouteLighthouse, routeTimeout]);
+          const finishedAtIso = new Date().toISOString();
+          const routeDuration = Math.round(performance.now() - routeStart);
+
+          if (!result || !result.lhr) {
+            skipped.push(route);
+            routeDiagnostics.push({
+              route,
+              startedAt: startedAtIso,
+              finishedAt: finishedAtIso,
+              durationMs: routeDuration,
+              status: "FAILED",
+              error: "Lighthouse returned empty report",
+            });
+            continue;
+          }
 
           const audits = result.lhr.audits;
 
@@ -134,8 +189,28 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
               TTFB: audits["server-response-time"]?.numericValue,
             },
           });
-        } catch {
+
+          routeDiagnostics.push({
+            route,
+            startedAt: startedAtIso,
+            finishedAt: finishedAtIso,
+            durationMs: routeDuration,
+            status: "SUCCESS",
+          });
+        } catch (routeErr: any) {
+          const finishedAtIso = new Date().toISOString();
+          const routeDuration = Math.round(performance.now() - routeStart);
+          const errMsg = routeErr instanceof Error ? routeErr.message : String(routeErr);
           skipped.push(route);
+
+          routeDiagnostics.push({
+            route,
+            startedAt: startedAtIso,
+            finishedAt: finishedAtIso,
+            durationMs: routeDuration,
+            status: errMsg.includes("timed out") ? "TIMED_OUT" : "FAILED",
+            error: errMsg,
+          });
         }
       }
 
@@ -149,15 +224,48 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
           duration: Math.round(performance.now() - started),
           pagesAttempted: auditRoutes.length,
           pagesCompleted: 0,
+          metadata: {
+            routeDiagnostics,
+          },
           data: [],
         };
       }
 
-      const performanceAvg = Math.round(pages.reduce((sum, p) => sum + p.performance, 0) / pages.length);
-      const accessibilityAvg = Math.round(pages.reduce((sum, p) => sum + p.accessibility, 0) / pages.length);
-      const bestPracticesAvg = Math.round(pages.reduce((sum, p) => sum + p.bestPractices, 0) / pages.length);
-      const seoAvg = Math.round(pages.reduce((sum, p) => sum + p.seo, 0) / pages.length);
+      const validPerf = pages.map((p) => p.performance).filter((s): s is number => typeof s === "number" && !Number.isNaN(s));
+      const validA11y = pages.map((p) => p.accessibility).filter((s): s is number => typeof s === "number" && !Number.isNaN(s));
+      const validBp = pages.map((p) => p.bestPractices).filter((s): s is number => typeof s === "number" && !Number.isNaN(s));
+      const validSeo = pages.map((p) => p.seo).filter((s): s is number => typeof s === "number" && !Number.isNaN(s));
 
+      const accessibilityAvg = validA11y.length ? Math.round(validA11y.reduce((sum, p) => sum + p, 0) / validA11y.length) : 0;
+      const bestPracticesAvg = validBp.length ? Math.round(validBp.reduce((sum, p) => sum + p, 0) / validBp.length) : 0;
+      const seoAvg = validSeo.length ? Math.round(validSeo.reduce((sum, p) => sum + p, 0) / validSeo.length) : 0;
+
+      if (validPerf.length === 0) {
+        return {
+          name: this.name,
+          status: "SKIPPED",
+          score: null,
+          message: `${pages.length}/${auditRoutes.length} page(s) audited — Performance score unavailable (NO_FCP)`,
+          skipReason: "Lighthouse performance score unavailable",
+          duration: Math.round(performance.now() - started),
+          pagesDiscovered: this.routes.length,
+          pagesAttempted: auditRoutes.length,
+          pagesCompleted: pages.length,
+          metadata: {
+            metric: "Lighthouse Performance",
+            categoryScores: {
+              performance: null,
+              accessibility: accessibilityAvg,
+              bestPractices: bestPracticesAvg,
+              seo: seoAvg,
+            },
+            routeDiagnostics,
+          },
+          data: pages,
+        };
+      }
+
+      const performanceAvg = Math.round(validPerf.reduce((sum, p) => sum + p, 0) / validPerf.length);
       const status = performanceAvg >= 90 ? "PASS" : performanceAvg >= 50 ? "WARNING" : "FAIL";
 
       return {
@@ -177,6 +285,7 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
             bestPractices: bestPracticesAvg,
             seo: seoAvg,
           },
+          routeDiagnostics,
         },
         data: pages,
       };
@@ -190,6 +299,9 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
         duration: Math.round(performance.now() - started),
         pagesAttempted: auditRoutes.length,
         pagesCompleted: 0,
+        metadata: {
+          routeDiagnostics,
+        },
       };
     } finally {
       try {

@@ -1,6 +1,7 @@
 import path from "path";
 import { discoverRoutes } from "../crawler.js";
 import { LighthouseCheck } from "../checks/lighthouse.js";
+import { ApiTestingCheck } from "../checks/api.js";
 import { runBrowserAudit, type BrowserAudit } from "../core/browser.js";
 import { startLocalServer, type LocalServer } from "../core/runner.js";
 import type { QaEngineOptions } from "../core/engine.js";
@@ -9,6 +10,14 @@ import type { Check, CheckResult } from "../types/result.js";
 function normalizeRoute(route: string): string {
   const trimmed = route.trim();
   if (!trimmed) return "/";
+
+  const methodMatch = trimmed.match(/^([A-Z]+)\s+(.+)$/);
+  if (methodMatch) {
+    const method = methodMatch[1];
+    let pathPart = methodMatch[2].replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0] || "/";
+    if (!pathPart.startsWith("/")) pathPart = `/${pathPart}`;
+    return `${method} ${pathPart}`;
+  }
 
   const pathOnly = trimmed.replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0] || "/";
   return pathOnly.startsWith("/") ? pathOnly : `/${pathOnly}`;
@@ -52,6 +61,10 @@ export class PipelineRuntime {
     private readonly reportDir: string,
     private readonly options: QaEngineOptions = {},
   ) {}
+
+  getOptions(): QaEngineOptions {
+    return this.options;
+  }
 
   async routes(): Promise<string[]> {
     this.routesPromise ??= discoverRoutes(this.projectPath).then((result) =>
@@ -98,27 +111,106 @@ export class PipelineRuntime {
   }
 }
 
-export class RouteDiscoveryCheck implements Check<{ routes: string[] }> {
+export class RouteDiscoveryCheck implements Check {
   readonly name = "Route Discovery";
 
   constructor(private readonly runtime: PipelineRuntime) {}
 
-  async run(_projectPath: string): Promise<CheckResult<{ routes: string[] }>> {
+  async run(_projectPath: string): Promise<CheckResult> {
     const started = performance.now();
     const routes = await this.runtime.routes();
+    const browserRoutesResolved = routes.filter((r) => {
+      const pathOnly = r.replace(/^[A-Z]+\s+/, "");
+      return !/[\[\]:*]/.test(pathOnly) && !pathOnly.startsWith("/api/") && !pathOnly.startsWith("api/");
+    });
+    const apiRoutesDiscovered = routes.filter((r) => {
+      const pathOnly = r.replace(/^[A-Z]+\s+/, "");
+      return pathOnly.startsWith("/api/") || pathOnly.startsWith("api/");
+    });
+    const dynamicRoutesUnresolved = routes.filter((r) => {
+      const pathOnly = r.replace(/^[A-Z]+\s+/, "");
+      return /[\[\]:*]/.test(pathOnly);
+    });
 
     return {
       name: this.name,
       status: routes.length ? "PASS" : "WARNING",
-      message: `${routes.length} routes`,
-      duration: performance.now() - started,
-      data: { routes },
+      message: `${routes.length} route(s) discovered (${browserRoutesResolved.length} browser, ${apiRoutesDiscovered.length} API, ${dynamicRoutesUnresolved.length} dynamic)`,
+      duration: Math.round(performance.now() - started),
+      data: {
+        routes,
+        routesDiscovered: routes,
+        browserRoutesResolved,
+        apiRoutesDiscovered,
+        dynamicRoutesUnresolved,
+      },
     };
   }
 }
 
+export class LazyApiTestingCheck implements Check {
+  readonly name = "API Testing";
+
+  constructor(private readonly runtime: PipelineRuntime) {}
+
+  async run(projectPath: string): Promise<CheckResult> {
+    const started = performance.now();
+    const testCases = this.runtime.getOptions().apiTestCases;
+    if (!testCases || testCases.length === 0) {
+      return {
+        name: this.name,
+        category: "api",
+        status: "SKIPPED",
+        score: 100,
+        message: "No API test cases configured",
+        duration: performance.now() - started,
+        data: { total: 0, passed: 0, failed: 0, results: [] },
+      };
+    }
+
+    let baseUrl = "";
+    try {
+      const server = await this.runtime.server();
+      baseUrl = server.url.replace(/\/$/, "");
+    } catch (err) {
+      return {
+        name: this.name,
+        category: "api",
+        status: "ERROR",
+        score: 0,
+        message: `Local server failed to start: ${err instanceof Error ? err.message : String(err)}`,
+        duration: performance.now() - started,
+      };
+    }
+
+    const rebasedCases = testCases.map((tc) => {
+      let targetUrl = tc.url;
+      try {
+        const u = new URL(targetUrl);
+        if (
+          u.hostname === "127.0.0.1" ||
+          u.hostname === "localhost" ||
+          u.hostname === "0.0.0.0"
+        ) {
+          targetUrl = `${baseUrl}${u.pathname}${u.search}`;
+        }
+      } catch {
+        if (targetUrl.startsWith("/")) {
+          targetUrl = `${baseUrl}${targetUrl}`;
+        } else {
+          targetUrl = `${baseUrl}/${targetUrl}`;
+        }
+      }
+      return { ...tc, url: targetUrl };
+    });
+
+    return new ApiTestingCheck(rebasedCases).run(projectPath);
+  }
+}
+
 export class LazyLighthouseCheck implements Check {
-  readonly name = "Lighthouse";
+  readonly name = "Lighthouse Performance";
+  readonly timeoutMs = 180_000;
 
   constructor(private readonly runtime: PipelineRuntime) {}
 

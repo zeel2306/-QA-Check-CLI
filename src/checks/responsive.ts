@@ -68,7 +68,7 @@ export class ResponsiveCheck extends BrowserCheck {
     if (pagesCompleted === 0) {
       return {
         name: this.name,
-        status: "SKIPPED",
+        status: "NOT_APPLICABLE",
         score: null,
         message: "No pages or HTML files audited for responsive layout",
         skipReason: "No HTML files or runtime target available",

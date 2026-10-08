@@ -9,10 +9,10 @@ test("AccessibilityCheck static checks detect missing lang, missing alt, missing
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "qa-check-a11y-test-"));
 
   try {
-    // Case 1: Empty folder -> SKIPPED (never PASS)
+    // Case 1: Empty folder -> NOT_APPLICABLE (never PASS)
     const check = new AccessibilityCheck();
     const resultEmpty = await check.run(tmpDir);
-    assert.equal(resultEmpty.status, "SKIPPED", "Zero pages audited MUST return SKIPPED");
+    assert.equal(resultEmpty.status, "NOT_APPLICABLE", "Zero pages audited MUST return NOT_APPLICABLE");
 
     // Case 2: HTML file with accessibility defects
     fs.writeFileSync(

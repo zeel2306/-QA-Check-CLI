@@ -1,20 +1,63 @@
 import path from "path";
 
+function hashString(input: string): string {
+  let hash = 5381;
+  for (let i = 0; i < input.length; i++) {
+    hash = (hash * 33) ^ input.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+export function stripVolatileQueryParams(rawUrl: string): string {
+  if (!rawUrl) return "";
+  let norm = rawUrl.trim();
+  const qIdx = norm.indexOf("?");
+  if (qIdx === -1) return norm;
+
+  const base = norm.slice(0, qIdx);
+  const hashIdx = norm.indexOf("#", qIdx);
+  const queryStr = hashIdx === -1 ? norm.slice(qIdx + 1) : norm.slice(qIdx + 1, hashIdx);
+  const hashStr = hashIdx === -1 ? "" : norm.slice(hashIdx);
+
+  try {
+    const params = new URLSearchParams(queryStr);
+    const volatileKeys = [
+      "_rsc",
+      "_next",
+      "__nextDataReq",
+      "v",
+      "cb",
+      "cacheBust",
+      "cachebust",
+      "_ts",
+      "timestamp",
+      "t",
+      "nonce",
+      "request_id",
+      "req_id",
+      "rid",
+    ];
+    for (const key of volatileKeys) {
+      params.delete(key);
+    }
+
+    const cleanQuery = params.toString();
+    return cleanQuery ? `${base}?${cleanQuery}${hashStr}` : `${base}${hashStr}`;
+  } catch {
+    return norm.split(/[?#]/)[0] || norm;
+  }
+}
+
 /**
  * Normalizes any file path, relative route, or URL to a canonical page identity.
- *
- * Rules:
- *  - Strips protocol & domain (e.g. http://localhost:4173 => /)
- *  - Strips query parameters and fragment anchors (?v=1#sec => "")
- *  - Normalizes backslashes to forward slashes (\ => /)
- *  - Strips leading relative dots (./products.html => /products.html)
- *  - Normalizes index.html and /index.html => /
- *  - Preserves sub-routes (/blog/post.html)
  */
 export function toCanonicalRoute(inputPathOrUrl: string): string {
   if (!inputPathOrUrl) return "/";
 
   let raw = inputPathOrUrl.trim();
+
+  // Strip volatile query parameters first
+  raw = stripVolatileQueryParams(raw);
 
   // Extract path component if full URL is supplied
   if (/^https?:\/\//i.test(raw)) {
@@ -59,12 +102,12 @@ export function toCanonicalTargetHref(rawHrefOrUrl: string, sourceRoute: string)
   if (!rawHrefOrUrl) return "";
 
   let raw = rawHrefOrUrl.trim();
+  raw = stripVolatileQueryParams(raw);
 
   // Handle external URLs
   if (/^https?:\/\//i.test(raw)) {
     try {
       const u = new URL(raw);
-      // If it's a localhost, 127.0.0.1, or local server target:
       if (
         u.hostname === "localhost" ||
         u.hostname === "127.0.0.1" ||
@@ -73,7 +116,6 @@ export function toCanonicalTargetHref(rawHrefOrUrl: string, sourceRoute: string)
       ) {
         raw = u.pathname;
       } else {
-        // External URL: keep origin + pathname, strip query & hash
         return `${u.origin}${u.pathname}`;
       }
     } catch {
@@ -81,25 +123,20 @@ export function toCanonicalTargetHref(rawHrefOrUrl: string, sourceRoute: string)
     }
   }
 
-  // Strip query string and fragment anchor
   raw = raw.split(/[?#]/)[0] || "";
-
-  // Normalize backslashes
   raw = raw.replaceAll("\\", "/");
 
   try {
     raw = decodeURIComponent(raw);
   } catch {
-    // Keep raw if decoding fails
+    // Keep raw
   }
 
-  // If absolute path
   if (raw.startsWith("/")) {
     if (raw === "/index.html") return "/";
     return raw;
   }
 
-  // Resolve relative path against source page directory
   const canonicalSource = toCanonicalRoute(sourceRoute);
   let sourceDir = "/";
   if (canonicalSource !== "/") {
@@ -113,17 +150,10 @@ export function toCanonicalTargetHref(rawHrefOrUrl: string, sourceRoute: string)
   return resolved.startsWith("/") ? resolved : `/${resolved}`;
 }
 
-/**
- * Resolves an asset path or URL relative to a canonical source route.
- */
 export function toCanonicalAssetPath(rawSrcOrUrl: string, sourceRoute: string): string {
   return toCanonicalTargetHref(rawSrcOrUrl, sourceRoute);
 }
 
-/**
- * Merges static and runtime findings using canonical page identity and a stable defect target signature.
- * Preserves evidence in `sources: ["static", "runtime"]` and optional evidence record.
- */
 export function deduplicateFindings<T extends Record<string, any>>(
   staticItems: T[],
   runtimeItems: T[],
@@ -165,6 +195,210 @@ export function deduplicateFindings<T extends Record<string, any>>(
       const existing = map.get(key)!;
       if (!existing.sources.includes("runtime")) existing.sources.push("runtime");
       if (item.reason && existing.evidence) existing.evidence.runtime = String(item.reason);
+    }
+  }
+
+  return [...map.values()];
+}
+
+export interface CanonicalObservation {
+  checkName: string;
+  message: string;
+  route?: string;
+  url?: string;
+}
+
+export type CanonicalCategory =
+  | "Code Quality"
+  | "SEO"
+  | "Accessibility"
+  | "Performance"
+  | "Network"
+  | "Console"
+  | "Links"
+  | "Images"
+  | "Responsive"
+  | "Build"
+  | "TypeScript"
+  | "ESLint"
+  | "API Testing";
+
+export interface CanonicalObservation {
+  checkName: string;
+  message: string;
+  route?: string;
+  url?: string;
+}
+
+export interface CanonicalDefect {
+  id: string;
+  category: CanonicalCategory;
+  title: string;
+  canonicalTarget: string;
+  primaryScanner: string;
+  observedBy: string[];
+  observations: CanonicalObservation[];
+}
+
+export function correlateCanonicalDefects(results: any[]): CanonicalDefect[] {
+  const map = new Map<string, CanonicalDefect>();
+
+  for (const result of results || []) {
+    if (!result || result.status === "PASS" || result.status === "NOT_APPLICABLE" || result.status === "SKIPPED") continue;
+
+    const checkName = result.name;
+
+    const addObs = (
+      category: CanonicalCategory,
+      title: string,
+      canonicalTarget: string,
+      primaryScanner: string,
+      obsMessage: string,
+      route?: string,
+      url?: string
+    ) => {
+      const targetClean = canonicalTarget.trim().toLowerCase();
+      const id = hashString(`${category}|${targetClean}`);
+      if (!map.has(id)) {
+        map.set(id, {
+          id,
+          category,
+          title,
+          canonicalTarget: canonicalTarget.trim(),
+          primaryScanner,
+          observedBy: [checkName],
+          observations: [{ checkName, message: obsMessage, route, url }],
+        });
+      } else {
+        const existing = map.get(id)!;
+        if (!existing.observedBy.includes(checkName)) {
+          existing.observedBy.push(checkName);
+        }
+        existing.observations.push({ checkName, message: obsMessage, route, url });
+      }
+    };
+
+    if (checkName === "Broken Images") {
+      const issues = Array.isArray(result.data?.issues) ? result.data.issues : Array.isArray(result.data?.missingAssets) ? result.data.missingAssets : [];
+      for (const item of issues) {
+        const rawTarget = item.url || item.path || item.src || item.file || item.target || "";
+        const target = toCanonicalRoute(rawTarget);
+        addObs("Images", `Missing Image Asset: ${target}`, target, "Broken Images", item.message || `Missing image asset: ${target}`, item.route, item.url);
+      }
+    } else if (checkName === "Broken Links") {
+      const issues = Array.isArray(result.data?.issues) ? result.data.issues : Array.isArray(result.data?.broken) ? result.data.broken : [];
+      for (const item of issues) {
+        const rawTarget = item.url || item.href || item.target || "";
+        const type = item.type || "";
+        if (type === "suspicious-hash-link" || rawTarget === "#" || rawTarget === "(empty)" || type === "javascript-link") {
+          const loc = item.file || item.route || "source";
+          const target = `${loc}#href=${rawTarget}`;
+          const title = type === "javascript-link" ? `JavaScript Link: ${loc}` : `Suspicious Hash Link: ${loc}`;
+          addObs("Links", title, target, "Broken Links", item.message || item.reason || title, item.route, item.url);
+        } else {
+          const target = toCanonicalRoute(rawTarget);
+          addObs("Links", `Broken Internal Link: ${target}`, target, "Broken Links", item.message || `Broken link: ${target}`, item.route, item.url);
+        }
+      }
+    } else if (checkName === "Network Errors") {
+      const issues = Array.isArray(result.data?.issues) ? result.data.issues : [];
+      for (const item of issues) {
+        const rawUrl = item.url || item.route || "";
+        const cleanUrl = stripVolatileQueryParams(rawUrl);
+        const normTarget = toCanonicalRoute(cleanUrl);
+
+        let category: CanonicalCategory = "Network";
+        let primaryScanner = "Network Errors";
+        let title = `Network Failure: ${normTarget}`;
+
+        if (normTarget.startsWith("/images/") || /\.(png|jpe?g|svg|webp|gif|ico)$/i.test(normTarget)) {
+          category = "Images";
+          primaryScanner = "Broken Images";
+          title = `Missing Image Asset: ${normTarget}`;
+        } else if (!normTarget.startsWith("/api/") && !normTarget.startsWith("api/")) {
+          category = "Links";
+          primaryScanner = "Broken Links";
+          title = `Broken Internal Link: ${normTarget}`;
+        }
+
+        addObs(category, title, normTarget, primaryScanner, item.message || `Network error ${item.status || 404}: ${normTarget}`, item.route, item.url);
+      }
+    } else if (checkName === "Console Errors") {
+      const issues = Array.isArray(result.data?.issues) ? result.data.issues : Array.isArray(result.data) ? result.data : [];
+      for (const item of issues) {
+        const type = item.type || "";
+        const msg = item.message || "";
+
+        if (type === "resource-load-error" || msg.includes("Failed to load resource") || msg.includes("404")) {
+          const match = msg.match(/https?:\/\/[^\s"']+/i) || msg.match(/\/[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+/);
+          const rawTarget = item.url || (match ? match[0] : "");
+          if (rawTarget && rawTarget !== item.route && rawTarget !== "/") {
+            const cleanUrl = stripVolatileQueryParams(rawTarget);
+            const normTarget = toCanonicalRoute(cleanUrl);
+            let category: CanonicalCategory = "Links";
+            let primaryScanner = "Broken Links";
+            let title = `Broken Internal Link: ${normTarget}`;
+            if (normTarget.startsWith("/images/") || /\.(png|jpe?g|svg|webp|gif|ico)$/i.test(normTarget)) {
+              category = "Images";
+              primaryScanner = "Broken Images";
+              title = `Missing Image Asset: ${normTarget}`;
+            } else if (normTarget.startsWith("/api/")) {
+              category = "Network";
+              primaryScanner = "Network Errors";
+              title = `Network Failure: ${normTarget}`;
+            }
+            addObs(category, title, normTarget, primaryScanner, msg, item.route, item.url);
+            continue;
+          }
+        }
+
+        const sig = `console-error:${msg}`;
+        addObs("Console", `Console Error: ${msg.slice(0, 60)}`, sig, "Console Errors", msg, item.route);
+      }
+    } else if (checkName === "ESLint") {
+      const issues = Array.isArray(result.data?.issues) ? result.data.issues : [];
+      for (const item of issues) {
+        const target = `${item.file}:${item.line}:${item.column} [${item.ruleId}]`;
+        addObs("ESLint", `ESLint [${item.ruleId}]: ${item.file}:${item.line}`, target, "ESLint", item.message, item.file);
+      }
+    } else if (checkName === "Code Quality Insights") {
+      const issues = Array.isArray(result.data?.issues) ? result.data.issues : [];
+      for (const item of issues) {
+        const target = item.file || item.route || item.message || "signal";
+        const title = item.type ? item.type.replace(/[-_]/g, " ").replace(/\b\w/g, (l: string) => l.toUpperCase()) : "Code Quality Signal";
+        addObs("Code Quality", title, `${item.type}:${target}`, "Code Quality Insights", item.message || title, item.route || item.file);
+      }
+    } else if (checkName === "API Testing") {
+      const resultsList = Array.isArray(result.data?.results) ? result.data.results : [];
+      for (const item of resultsList) {
+        if (item.status === "FAIL") {
+          const rawUrl = item.url || "";
+          const pathOnly = rawUrl.replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0] || rawUrl;
+          const method = (item.method || "GET").toUpperCase();
+          const target = `${method} ${toCanonicalRoute(pathOnly)}`;
+          const title = `API Contract Failure: ${item.name}`;
+          addObs("API Testing", title, target, "API Testing", item.message || title, toCanonicalRoute(pathOnly), item.url);
+        }
+      }
+    } else {
+      const category: CanonicalCategory =
+        checkName.includes("SEO") ? "SEO" :
+        checkName.includes("Accessibility") ? "Accessibility" :
+        checkName.includes("Responsive") ? "Responsive" :
+        checkName.includes("TypeScript") ? "TypeScript" :
+        checkName.includes("Build") ? "Build" :
+        checkName.includes("Performance") ? "Performance" : "Code Quality";
+
+      const issues = Array.isArray(result.data?.issues) ? result.data.issues : [];
+      if (issues.length > 0) {
+        for (const item of issues) {
+          const target = item.route || item.file || item.selector || item.message || checkName;
+          const title = item.type ? item.type.replace(/[-_]/g, " ").replace(/\b\w/g, (l: string) => l.toUpperCase()) : `${checkName} Issue`;
+          addObs(category, title, `${checkName}:${target}`, checkName, item.message || title, item.route || item.file);
+        }
+      } else if (result.message && typeof result.score !== "number") {
+        addObs(category, `${checkName} Warning`, `${checkName}:${result.message}`, checkName, result.message);
+      }
     }
   }
 

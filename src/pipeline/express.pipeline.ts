@@ -11,6 +11,7 @@ export class ExpressPipeline extends BasePipeline {
       this.typeScript(),
       this.codeQuality(),
       this.routes(),
+      this.apiTesting(),
       this.seo(),
       this.accessibility(),
       this.lighthouse(),

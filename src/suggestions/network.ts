@@ -33,4 +33,24 @@ export const networkSuggestions: SuggestionMap = {
     suggestedFix: ["Manually verify the external destination.", "Replace unreliable links."],
     shortFix: "Verify the external link manually.",
   },
+  "http-404": {
+    code: "http-404",
+    title: "HTTP 404 Not Found",
+    problem: "A requested network resource or endpoint returned HTTP 404 Not Found.",
+    whyItMatters: "Missing endpoints or resources disrupt application features and data loading.",
+    suggestedFix: [
+      "Verify the endpoint/path, server routing, base URL, and environment configuration.",
+    ],
+    shortFix: "Verify the endpoint/path, server routing, base URL, and environment configuration.",
+  },
+  timeout: {
+    code: "timeout",
+    title: "Scanner Timeout",
+    problem: "The check execution timed out before receiving a response.",
+    whyItMatters: "Slow or unresponsive servers prevent full QA audit coverage.",
+    suggestedFix: [
+      "Check whether the application/server started successfully and whether the configured timeout is appropriate.",
+    ],
+    shortFix: "Check whether the application/server started successfully and whether the configured timeout is appropriate.",
+  },
 };

@@ -41,17 +41,22 @@ export function evaluateCurrentQualityGate(
   const minScore = options.minScore ?? 0;
   const failingChecks: string[] = [];
   const warningChecks: string[] = [];
+  const skippedChecks: string[] = [];
+  const erroredChecks: string[] = [];
   const reasons: string[] = [];
 
   for (const r of results) {
     if (r.status === "FAIL" || r.status === "ERROR") {
       failingChecks.push(r.name);
+      if (r.status === "ERROR") erroredChecks.push(r.name);
       reasons.push(`${r.name} failed`);
     } else if (r.status === "WARNING") {
       warningChecks.push(r.name);
       if (failOn === "warning") {
         reasons.push(`${r.name} warning`);
       }
+    } else if (r.status === "SKIPPED") {
+      skippedChecks.push(r.name);
     }
   }
 
@@ -59,16 +64,42 @@ export function evaluateCurrentQualityGate(
     reasons.push(`Overall score ${overallScore} is below minimum required score ${minScore}`);
   }
 
-  const passed =
-    failingChecks.length === 0 &&
-    (failOn !== "warning" || warningChecks.length === 0) &&
-    (minScore === 0 || overallScore >= minScore);
+  const coverage = calculateScanCoverage(results);
+  const confidence: "FULL" | "PARTIAL" = coverage.coveragePercent >= 100 ? "FULL" : "PARTIAL";
+  const confidencePercent = coverage.coveragePercent;
+
+  const hasFailures =
+    failingChecks.length > 0 ||
+    (failOn === "warning" && warningChecks.length > 0) ||
+    (minScore > 0 && overallScore < minScore);
+
+  let status: "PASSED" | "FAILED" | "INCOMPLETE";
+  let passed = false;
+
+  if (hasFailures) {
+    status = "FAILED";
+    passed = false;
+  } else if (skippedChecks.length > 0 || erroredChecks.length > 0) {
+    status = "INCOMPLETE";
+    passed = false;
+    const count = skippedChecks.length + erroredChecks.length;
+    const names = [...skippedChecks, ...erroredChecks].join(", ");
+    reasons.push(`Scan is incomplete: ${count} check(s) skipped/errored (${names})`);
+  } else {
+    status = "PASSED";
+    passed = true;
+  }
 
   return {
     passed,
+    status,
+    confidence,
+    confidencePercent,
     reasons,
     failingChecks,
     warningChecks,
+    skippedChecks,
+    erroredChecks,
   };
 }
 

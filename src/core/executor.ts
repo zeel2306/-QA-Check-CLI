@@ -28,6 +28,7 @@ function legacyCheckAdapter(check: Check): QACheck {
   return {
     name: check.name,
     category: inferCheckCategory(check.name),
+    timeoutMs: (check as any).timeoutMs,
     run: (context) => check.run(context.projectPath),
   };
 }

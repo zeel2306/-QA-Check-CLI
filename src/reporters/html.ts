@@ -2,9 +2,11 @@ import fs from "fs/promises";
 import path from "path";
 import type { AuditReport, CheckResult, CheckStatus } from "../types/result.js";
 import { getIssueSuggestions, type IssueSuggestion } from "../suggestions/index.js";
+import { stripAnsi } from "../utils/ansi.js";
 
 function escape(value: unknown): string {
-  return String(value ?? "").replace(
+  const clean = stripAnsi(String(value ?? ""));
+  return clean.replace(
     /[&<>"']/g,
     (character) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
@@ -79,7 +81,12 @@ function renderValue(value: unknown): string {
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number") return Number.isFinite(value) ? escape(value.toLocaleString()) : "0";
   if (typeof value === "string") return escape(value);
-  if (Array.isArray(value)) return escape(`${value.length} item${value.length === 1 ? "" : "s"}`);
+  if (Array.isArray(value)) {
+    if (value.length > 0 && value.every((v) => typeof v === "string" || typeof v === "number")) {
+      return escape(value.join(", "));
+    }
+    return escape(`${value.length} item${value.length === 1 ? "" : "s"}`);
+  }
   if (isRecord(value)) return escape(Object.keys(value).slice(0, 4).map(formatKey).join(", "));
   return escape(String(value));
 }
@@ -107,6 +114,7 @@ function getAnalytics(report: AuditReport) {
   const warning = report.results.filter((result) => result.status === "WARNING").length;
   const fail = report.results.filter((result) => result.status === "FAIL").length;
   const skipped = report.results.filter((result) => result.status === "SKIPPED").length;
+  const notApplicable = report.results.filter((result) => result.status === "NOT_APPLICABLE").length;
   const error = report.results.filter((result) => result.status === "ERROR").length;
   const scored = report.results.filter((result): result is CheckResult & { score: number } => typeof result.score === "number");
   const averageScore = scored.length
@@ -115,7 +123,7 @@ function getAnalytics(report: AuditReport) {
   const totalIssues = report.results.reduce((total, result) => total + getIssueCount(result), 0);
   const performance = report.results.find((result) => result.name === "Performance");
 
-  return { pass, warning, fail, skipped, error, averageScore, totalIssues, performanceScore: performance?.score ?? 0 };
+  return { pass, warning, fail, skipped, notApplicable, error, averageScore, totalIssues, performanceScore: performance?.score ?? 0 };
 }
 
 function getIssueGroupKey(item: unknown, fallback: string): string {
@@ -237,13 +245,28 @@ function renderIssueViewer(result: CheckResult): string {
         .join("")
     : "<p class=\"empty-state\">No grouped issues were reported for this check.</p>";
 
-  const dataRows = isRecord(result.data)
-    ? Object.entries(result.data)
-        .filter(([, value]) => !Array.isArray(value) && isRecord(result.data))
-        .filter(([key]) => !["grouped"].includes(key))
-        .map(([key, value]) => `<div class="detail-row"><span>${escape(formatKey(key))}</span><strong>${renderValue(value)}</strong></div>`)
-        .join("")
-    : "";
+  let dataRows = "";
+  if (result.status === "NOT_APPLICABLE") {
+    dataRows = `
+      <div class="detail-row"><span>Execution</span><strong>Not required</strong></div>
+      <div class="detail-row"><span>Reason</span><strong>${escape(result.message || "Scanner not applicable to this project")}</strong></div>
+    `;
+  } else if (isRecord(result.data)) {
+    dataRows = Object.entries(result.data)
+      .filter(([, value]) => !Array.isArray(value) && isRecord(result.data))
+      .filter(([key]) => !["grouped"].includes(key))
+      .map(([key, value]) => `<div class="detail-row"><span>${escape(formatKey(key))}</span><strong>${renderValue(value)}</strong></div>`)
+      .join("");
+  }
+
+  if (result.status === "NOT_APPLICABLE") {
+    return `
+      <div class="details-panel">
+        <div class="detail-grid">${dataRows}</div>
+        <p class="muted" style="margin:8px 0 0;">Check is not applicable for this project structure.</p>
+      </div>
+    `;
+  }
 
   return `
     <div class="details-panel">
@@ -288,7 +311,7 @@ function renderHero(report: AuditReport): string {
         <h1>Enterprise QA Dashboard</h1>
         <p>Quality signals, issues, screenshots, suggestions, and pipeline health in one production-ready report.</p>
       </div>
-      <div class="score-orbit" style="--score:${clampScore(report.overallScore)}">
+      <div class="score-orbit" style="--score:${clampScore(report.overallScore)}" title="Overall Quality Score: Weighted quality score across applicable QA categories (core categories double-weighted)">
         <div><strong>${clampScore(report.overallScore)}</strong><span>/100</span></div>
         <small>Overall Score</small>
       </div>
@@ -296,7 +319,7 @@ function renderHero(report: AuditReport): string {
         ${renderMeta("Framework", report.framework)}
         ${renderMeta("Language", report.language ?? "Unknown")}
         ${renderMeta("Package Manager", report.packageManager ?? "None")}
-        ${renderMeta("Pages", report.routes.length)}
+        ${renderMeta("Routes", report.routes.length)}
         ${renderMeta("Duration", formatDuration(report.duration))}
         ${renderMeta("Pipeline", report.pipeline)}
         ${renderMeta("Project Path", report.projectPath)}
@@ -310,22 +333,23 @@ function renderAnalytics(report: AuditReport): string {
   const analytics = getAnalytics(report);
   const cov = report.coverage;
   const cards = [
-    ["PASS checks", analytics.pass, "Completed successfully", "pass"],
-    ["WARNING checks", analytics.warning, "Need review", "warning"],
-    ["FAIL checks", analytics.fail, "Require action", "fail"],
-    ["ERROR checks", analytics.error, "Execution errors", "fail"],
-    ["Skipped checks", analytics.skipped || report.checksSkipped.length, "Not executed", "skipped"],
-    ["Scan Coverage", cov ? `${cov.coveragePercent}%` : "100%", `${cov?.executedSuccessfully ?? 0}/${cov?.applicableScanners ?? 0} executed`, "score"],
-    ["Average Score", `${analytics.averageScore}/100`, "Across scored checks", "score"],
-    ["Total Issues", analytics.totalIssues, "Across all checks", "issues"],
+    ["PASS checks", analytics.pass, "Completed successfully", "pass", "Scanners that executed without finding defects"],
+    ["WARNING checks", analytics.warning, "Need review", "warning", "Scanners that executed with non-blocking review signals"],
+    ["FAIL checks", analytics.fail, "Require action", "fail", "Scanners that detected application defects"],
+    ["ERROR checks", analytics.error, "Execution errors", "fail", "Scanners that encountered execution failures"],
+    ["Skipped checks", analytics.skipped, "Not executed", "skipped", "Applicable scanners that were not executed"],
+    ["NOT APPLICABLE", analytics.notApplicable, "Excluded from applicable scanners", "not-applicable", "Scanners that do not apply to this project structure"],
+    ["Scan Coverage", cov ? `${cov.coveragePercent}%` : "100%", `${cov?.executedSuccessfully ?? 0}/${cov?.applicableScanners ?? 0} executed`, "score", "Scan Coverage: Percentage of applicable QA scanners executed successfully"],
+    ["Raw Observations", report.rawObservations ?? analytics.totalIssues, "Scanner observations before cross-scanner correlation", "issues", "Raw Observations: Total observations returned by individual scanners before cross-scanner correlation"],
+    ["Unique Defects", report.uniqueDefects ?? report.canonicalDefects?.length ?? 0, "Canonical application defects after correlation", "issues", "Unique Defects: Total unique physical defects after cross-scanner correlation"],
   ] as const;
 
   return `
     <section class="analytics-grid">
       ${cards
         .map(
-          ([label, value, detail, tone]) => `
-            <article class="analytics-card ${tone}">
+          ([label, value, detail, tone, tooltip]) => `
+            <article class="analytics-card ${tone}" title="${escape(tooltip)}">
               <span>${escape(label)}</span>
               <strong>${escape(value)}</strong>
               <p>${escape(detail)}</p>
@@ -347,8 +371,18 @@ function formatDelta(delta: number | undefined, inverse = false): string {
 
 function renderQualityGatesBanner(report: AuditReport): string {
   const currentGate = report.currentQualityGate;
-  const currentClass = currentGate?.passed ? "gate-passed" : "gate-failed";
-  const currentTitle = currentGate?.passed ? "Current Quality Gate: PASSED ✅" : "Current Quality Gate: FAILED ❌";
+  const gateStatus = currentGate?.status || (currentGate?.passed ? "PASSED" : "FAILED");
+  const currentClass = gateStatus === "PASSED" ? "gate-passed" : gateStatus === "INCOMPLETE" ? "gate-warning" : "gate-failed";
+  const currentTitle = gateStatus === "PASSED"
+    ? "Current Quality Gate: PASSED ✅"
+    : gateStatus === "INCOMPLETE"
+    ? "Current Quality Gate: INCOMPLETE ⚠️"
+    : "Current Quality Gate: FAILED ❌";
+  const confidence = currentGate?.confidence
+    ? `${currentGate.confidence} (${currentGate.confidencePercent}%)`
+    : report.coverage
+    ? `${report.coverage.coveragePercent >= 100 ? "FULL" : "PARTIAL"} (${report.coverage.coveragePercent}%)`
+    : "FULL (100%)";
 
   const baselineGate = report.baseline?.qualityGate;
   const regClass = baselineGate?.passed ? "gate-passed" : "gate-failed";
@@ -365,6 +399,7 @@ function renderQualityGatesBanner(report: AuditReport): string {
       <div class="quality-gates-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:1rem;">
         <div class="quality-gate-banner ${currentClass}">
           <h3>${currentTitle}</h3>
+          <p style="margin: 4px 0 8px; font-weight: 600; opacity: 0.9;">Confidence: ${escape(confidence)}</p>
           <ul>
             ${(currentGate?.reasons.length ? currentGate.reasons : ["All applicable checks passed threshold"]).map((r) => `<li>${escape(r)}</li>`).join("")}
           </ul>
@@ -392,25 +427,90 @@ function renderBaseline(report: AuditReport): string {
   const baseline = report.baseline;
   const qGate = baseline.qualityGate;
   const catScores = baseline.categoryScores || [];
-  const { newIssues = [], fixedIssues = [], regressedChecks = [] } = baseline.categorizedIssues || {};
+  const metricChanges = baseline.metricChanges || [];
+  const {
+    newIssues = [],
+    fixedIssues = [],
+    scannerExecutionChanges = [],
+    scannerComparisonStates = [],
+  } = baseline.categorizedIssues || {};
 
   const gateClass = qGate?.passed ? "gate-passed" : "gate-failed";
   const gateTitle = qGate?.passed ? "Regression Gate: PASSED ✅" : "Regression Gate: FAILED ❌";
+
+  const unavailableStates = scannerComparisonStates.filter((s) => s.status === "UNAVAILABLE");
 
   const catRows = catScores.length > 0
     ? catScores
         .map(
           (c) => `
-            <div class="cat-row ${c.status === "REGRESSED" ? "regressed" : "improved"}">
+            <div class="cat-row ${c.status === "REGRESSED" ? "regressed" : c.status === "IMPROVED" ? "improved" : "stable"}">
               <strong>${escape(c.category)}</strong>
               <span>${c.previousScore} → ${c.currentScore}</span>
-              <span class="badge ${c.status === "REGRESSED" ? "badge-red" : "badge-green"}">
-                ${c.status === "REGRESSED" ? "🔴 Regressed" : "🟢 Stable/Improved"}
+              <span class="badge ${c.status === "REGRESSED" ? "badge-red" : c.status === "IMPROVED" ? "badge-green" : "badge-gray"}">
+                ${c.status === "REGRESSED" ? "🔴 REGRESSED" : c.status === "IMPROVED" ? "🟢 IMPROVED" : "⚪ STABLE"}
               </span>
             </div>
           `,
         )
         .join("")
+    : "";
+
+  const metricRows = metricChanges.length > 0
+    ? metricChanges
+        .map(
+          (m) => `
+            <div class="cat-row ${m.status === "REGRESSED" ? "regressed" : m.status === "IMPROVED" ? "improved" : "stable"}">
+              <strong>${escape(m.name)}</strong>
+              <span>${m.previous} → ${m.current} (${m.delta >= 0 ? "+" : ""}${m.delta})</span>
+              <span class="badge ${m.status === "REGRESSED" ? "badge-red" : m.status === "IMPROVED" ? "badge-green" : "badge-gray"}">
+                ${m.status === "REGRESSED" ? "🔴 REGRESSED" : m.status === "IMPROVED" ? "🟢 IMPROVED" : "⚪ STABLE"}
+              </span>
+            </div>
+          `,
+        )
+        .join("")
+    : "";
+
+  const unavailableHtml = unavailableStates.length > 0
+    ? `
+      <div class="regression-sub-panel">
+        <h3 class="text-amber">COMPARISON UNAVAILABLE ⚠️ (${unavailableStates.length})</h3>
+        <ul class="regression-list">
+          ${unavailableStates
+            .map(
+              (s) => `
+                <li>
+                  <span class="tag tag-amber">[${escape(s.checkName)}]</span>
+                  <strong>${escape(s.reason || "Scanner status not comparable across runs.")}</strong>
+                </li>
+              `,
+            )
+            .join("")}
+        </ul>
+      </div>
+    `
+    : "";
+
+  const executionChangesHtml = scannerExecutionChanges.length > 0
+    ? `
+      <div class="regression-sub-panel">
+        <h3>Scanner Execution Changes (Infrastructure) ⚙️ (${scannerExecutionChanges.length})</h3>
+        <ul class="regression-list">
+          ${scannerExecutionChanges
+            .map(
+              (e) => `
+                <li>
+                  <span class="tag tag-blue">[${escape(e.checkName)}]</span>
+                  <strong>${escape(e.previousStatus)} → ${escape(e.currentStatus)}</strong>
+                  <small>${escape(e.description)}</small>
+                </li>
+              `,
+            )
+            .join("")}
+        </ul>
+      </div>
+    `
     : "";
 
   const newIssuesHtml = newIssues.length > 0
@@ -425,7 +525,8 @@ function renderBaseline(report: AuditReport): string {
                 <li>
                   <span class="tag tag-red">[${escape(i.checkName)}]</span>
                   <strong>${escape(i.message)}</strong>
-                  ${i.route || i.file ? `<small>(${escape(i.route || i.file)})</small>` : ""}
+                  ${i.route ? `<small>Route: ${escape(i.route)}</small>` : ""}
+                  ${i.target ? `<small>Target: ${escape(i.target)}</small>` : ""}
                 </li>
               `,
             )
@@ -434,7 +535,12 @@ function renderBaseline(report: AuditReport): string {
         ${newIssues.length > 10 ? `<p class="detail-note">+ ${newIssues.length - 10} more new issues not shown</p>` : ""}
       </div>
     `
-    : "";
+    : `
+      <div class="regression-sub-panel">
+        <h3 class="text-green">NEW ISSUES ❌ (0)</h3>
+        <p class="detail-note">No new application defects introduced in this scan.</p>
+      </div>
+    `;
 
   const fixedIssuesHtml = fixedIssues.length > 0
     ? `
@@ -448,7 +554,8 @@ function renderBaseline(report: AuditReport): string {
                 <li>
                   <span class="tag tag-green">[${escape(i.checkName)}]</span>
                   <strong>${escape(i.message)}</strong>
-                  ${i.route || i.file ? `<small>(${escape(i.route || i.file)})</small>` : ""}
+                  ${i.route ? `<small>Route: ${escape(i.route)}</small>` : ""}
+                  ${i.target ? `<small>Target: ${escape(i.target)}</small>` : ""}
                 </li>
               `,
             )
@@ -457,7 +564,12 @@ function renderBaseline(report: AuditReport): string {
         ${fixedIssues.length > 10 ? `<p class="detail-note">+ ${fixedIssues.length - 10} more fixed issues not shown</p>` : ""}
       </div>
     `
-    : "";
+    : `
+      <div class="regression-sub-panel">
+        <h3 class="text-gray">FIXED ISSUES ✅ (0)</h3>
+        <p class="detail-note">No issues fixed since previous scan.</p>
+      </div>
+    `;
 
   return `
     <section class="section baseline-panel">
@@ -467,13 +579,6 @@ function renderBaseline(report: AuditReport): string {
           <h2>Baseline Comparison vs Previous Scan</h2>
         </div>
         <span>Previous run: ${escape(formatDate(baseline.previousRun))}</span>
-      </div>
-
-      <div class="quality-gate-banner ${gateClass}">
-        <h3>${gateTitle}</h3>
-        <ul>
-          ${(qGate?.reasons || []).map((r) => `<li>${escape(r)}</li>`).join("")}
-        </ul>
       </div>
 
       ${
@@ -487,9 +592,63 @@ function renderBaseline(report: AuditReport): string {
           : ""
       }
 
+      ${
+        metricRows
+          ? `
+        <div class="category-comparison-grid">
+          <h3>Metric Changes</h3>
+          <div class="cat-grid">${metricRows}</div>
+        </div>
+      `
+          : ""
+      }
+
+      ${unavailableHtml}
+      ${executionChangesHtml}
+
       <div class="issue-diff-container">
         ${newIssuesHtml}
         ${fixedIssuesHtml}
+      </div>
+    </section>
+  `;
+}
+
+function renderCanonicalDefects(report: AuditReport): string {
+  if (!report.canonicalDefects || !report.canonicalDefects.length) return "";
+
+  return `
+    <section class="section baseline-panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">CROSS-SCANNER DEDUPLICATION</p>
+          <h2>Canonical Application Defects (${report.canonicalDefects.length})</h2>
+        </div>
+        <span>Correlated across active scanners</span>
+      </div>
+      <div class="clean-list">
+        ${report.canonicalDefects
+          .map(
+            (defect) => `
+              <li style="display:flex; flex-direction:column; gap:6px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <strong>${escape(defect.canonicalTarget)}</strong>
+                  <span class="status-badge" style="--status-color:var(--danger)">${escape(defect.category.toUpperCase())}</span>
+                </div>
+                <small class="muted">Primary Scanner: <strong>${escape(defect.primaryScanner)}</strong></small>
+                <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px;">
+                  <span class="muted" style="font-size:0.78rem;">Observed by:</span>
+                  ${defect.observedBy.map((scanner: string) => `<span class="status-badge" style="--status-color:var(--accent); font-size:0.7rem; padding:2px 8px;">${escape(scanner)}</span>`).join("")}
+                </div>
+                ${
+                  defect.observations.length > 0
+                    ? `<details style="margin-top:6px; font-size:0.85rem;"><summary>View ${defect.observations.length} observation(s)</summary><ul style="margin:4px 0 0; padding-left:16px;">${defect.observations.map((obs: { checkName: string; message: string }) => `<li><strong>[${escape(obs.checkName)}]</strong> ${escape(obs.message)}</li>`).join("")}</ul></details>`
+                    : ""
+                }
+              </li>
+            `
+          )
+          .join("")}
       </div>
     </section>
   `;
@@ -521,7 +680,7 @@ function renderHistory(report: AuditReport): string {
           <span>Previous Score</span>
           <strong>${escape(previous ? `${previous.overallScore}/100` : "New")}</strong>
         </article>
-        <article class="${(history.scoreDelta ?? 0) >= 0 ? "positive" : "negative"}">
+        <article class="${(history.scoreDelta ?? 0) >= 0 ? "positive" : (history.scoreDelta ?? 0) >= -2 ? "neutral" : "negative"}">
           <span>Score Change</span>
           <strong>${escape(formatDelta(history.scoreDelta))}</strong>
         </article>
@@ -572,7 +731,17 @@ function renderToolbar(): string {
         <input id="checkSearch" type="search" placeholder="Search by check name" autocomplete="off">
       </label>
       <div class="filters" aria-label="Status filters">
-        ${["ALL", "PASS", "WARNING", "FAIL", "ERROR", "SKIPPED"].map((status) => `<button type="button" class="filter-button ${status === "ALL" ? "active" : ""}" data-filter="${status}">${status}</button>`).join("")}
+        ${[
+          { id: "ALL", label: "ALL" },
+          { id: "PASS", label: "PASS" },
+          { id: "WARNING", label: "WARNING" },
+          { id: "FAIL", label: "FAIL" },
+          { id: "ERROR", label: "ERROR" },
+          { id: "SKIPPED", label: "SKIPPED" },
+          { id: "NOT_APPLICABLE", label: "NOT APPLICABLE" },
+        ]
+          .map((filter) => `<button type="button" class="filter-button ${filter.id === "ALL" ? "active" : ""}" data-filter="${filter.id}">${filter.label}</button>`)
+          .join("")}
       </div>
       <div class="actions">
         <button type="button" id="expandAll">Expand All</button>
@@ -584,28 +753,61 @@ function renderToolbar(): string {
   `;
 }
 
+function statusClass(status: CheckStatus | string): string {
+  switch (status) {
+    case "NOT_APPLICABLE":
+      return "not-applicable";
+    default:
+      return String(status).toLowerCase();
+  }
+}
+
 function renderCheckCard(result: CheckResult): string {
   const issueCount = getIssueCount(result);
   const color = getStatusColor(result.status);
   const score = typeof result.score === "number" ? clampScore(result.score) : "N/A";
 
+  let summaryTitle = "";
+  switch (result.status) {
+    case "PASS":
+      summaryTitle = "✓ No issues detected";
+      break;
+    case "WARNING":
+      summaryTitle = issueCount > 0 ? `⚠ ${issueCount} warning finding${issueCount === 1 ? "" : "s"} found` : "⚠ Review recommended";
+      break;
+    case "FAIL":
+      summaryTitle = `✖ ${issueCount || "Findings"} detected`;
+      break;
+    case "ERROR":
+      summaryTitle = "! Check could not complete";
+      break;
+    case "SKIPPED":
+      summaryTitle = "○ Check not executed";
+      break;
+    case "NOT_APPLICABLE":
+      summaryTitle = "— Not applicable";
+      break;
+  }
+
+  const displayStatus = result.status === "NOT_APPLICABLE" ? "NOT APPLICABLE" : result.status;
+
   return `
-    <article class="check-card ${result.status.toLowerCase()}" data-check-card data-name="${escape(result.name.toLowerCase())}" data-status="${result.status}">
+    <article class="check-card ${statusClass(result.status)}" data-check-card data-name="${escape(result.name.toLowerCase())}" data-status="${result.status}">
       <header class="card-header">
         <div class="check-title">
           <span class="status-icon" style="--status-color:${color}">${escape(statusIcon(result.status))}</span>
-          <div><h2>${escape(result.name)}</h2><p>${escape(result.status)} check</p></div>
+          <div><h2>${escape(result.name)}</h2><p>${escape(displayStatus)} check</p></div>
         </div>
-        <span class="status-badge" style="--status-color:${color}">${escape(result.status)}</span>
+        <span class="status-badge" style="--status-color:${color}">${escape(displayStatus)}</span>
       </header>
       <div class="metric-row">
         <div><span>Score</span><strong>${escape(score)}</strong></div>
-        <div><span>Issues</span><strong>${issueCount}</strong></div>
+        <div><span>Findings</span><strong>${issueCount}</strong></div>
         <div><span>Duration</span><strong>${escape(formatDuration(result.duration))}</strong></div>
       </div>
       ${renderProgress(typeof result.score === "number" ? result.score : undefined)}
       <div class="summary-block">
-        <strong>${issueCount === 0 ? "✓ No issues detected" : `! ${issueCount} issue${issueCount === 1 ? "" : "s"} found`}</strong>
+        <strong>${summaryTitle}</strong>
         <p>${escape(result.message ?? "No summary provided.")}</p>
       </div>
       <details>
@@ -982,6 +1184,9 @@ function renderStyles(): string {
       .baseline-summary .positive strong {
         color: var(--success);
       }
+      .baseline-summary .neutral strong {
+        color: var(--text-soft);
+      }
       .baseline-summary .negative strong {
         color: var(--danger);
       }
@@ -1055,6 +1260,7 @@ function renderStyles(): string {
       .check-card.fail { --status-color: var(--danger); }
       .check-card.error { --status-color: #f43f5e; }
       .check-card.skipped { --status-color: var(--text-muted); }
+      .check-card.not-applicable { --status-color: #64748b; }
       .card-header, .check-title, .metric-row, .summary-block, .progress { display: flex; gap: 12px; }
       .card-header { align-items: flex-start; justify-content: space-between; }
       .check-title { min-width: 0; align-items: flex-start; }
@@ -1179,12 +1385,14 @@ function renderHtml(report: AuditReport): string {
       ${renderAnalytics(report)}
       ${renderQualityGatesBanner(report)}
       ${renderBaseline(report)}
+      ${renderCanonicalDefects(report)}
       ${renderHistory(report)}
       ${renderToolbar()}
       ${renderCharts(report)}
-      <section class="section two-column">
+      <section class="section two-column" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
         ${renderListPanel("Checks executed", "Executed", report.checksExecuted)}
         ${renderListPanel("Checks skipped", "Skipped", report.checksSkipped)}
+        ${renderListPanel("Checks not applicable", "Not Applicable", report.checksNotApplicable || [])}
       </section>
       ${renderChecks(report)}
       ${renderRecommendations(report)}

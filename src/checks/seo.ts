@@ -95,7 +95,15 @@ export class SeoCheck extends BrowserCheck {
         }
 
         if (baseUrl) {
+          const hasStaticRobots = (await fg(["**/robots.{txt,ts,js}"], { cwd: projectPath, ignore: ["**/node_modules/**"] })).length > 0;
+          const hasStaticSitemap = (await fg(["**/sitemap.{xml,ts,js}"], { cwd: projectPath, ignore: ["**/node_modules/**"] })).length > 0;
+
           for (const endpoint of ["/robots.txt", "/sitemap.xml"]) {
+            const isRobots = endpoint === "/robots.txt";
+            if ((isRobots && hasStaticRobots) || (!isRobots && hasStaticSitemap)) {
+              continue;
+            }
+
             try {
               const response = await fetch(new URL(endpoint, baseUrl), {
                 signal: AbortSignal.timeout(5_000),
@@ -124,7 +132,7 @@ export class SeoCheck extends BrowserCheck {
     if (pagesCompleted === 0) {
       return {
         name: this.name,
-        status: "SKIPPED",
+        status: "NOT_APPLICABLE",
         score: null,
         message: "No pages or HTML files audited for SEO",
         skipReason: "No HTML files or runtime target available",

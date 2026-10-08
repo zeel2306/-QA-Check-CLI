@@ -12,7 +12,7 @@ import { SeoCheck } from "../checks/seo.js";
 import { runLint } from "../lint.js";
 import { runTypeScript } from "../typescript.js";
 import type { Check } from "../types/result.js";
-import { LazyLighthouseCheck, PipelineRuntime, RouteDiscoveryCheck } from "./runtime.js";
+import { LazyApiTestingCheck, LazyLighthouseCheck, PipelineRuntime, RouteDiscoveryCheck } from "./runtime.js";
 
 export interface Pipeline {
   framework: string;
@@ -44,6 +44,10 @@ export abstract class BasePipeline implements Pipeline {
 
   protected routes(): Check {
     return new RouteDiscoveryCheck(this.runtime);
+  }
+
+  protected apiTesting(): Check {
+    return new LazyApiTestingCheck(this.runtime);
   }
 
   protected responsive(): Check {

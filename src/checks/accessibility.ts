@@ -128,7 +128,7 @@ export class AccessibilityCheck extends BrowserCheck {
     if (pagesSuccessfullyAudited === 0) {
       return {
         name: this.name,
-        status: "SKIPPED",
+        status: "NOT_APPLICABLE",
         score: null,
         message: "No pages successfully audited for accessibility",
         skipReason: skipReason || "No runtime URL or HTML files available",

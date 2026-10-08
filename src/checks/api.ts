@@ -32,6 +32,8 @@ export interface ApiCheckData {
   passed: number;
   failed: number;
   results: ApiTestResultItem[];
+  testedEndpointsCount?: number;
+  testedEndpoints?: string[];
 }
 
 function resolveEnvVars(value: string): string {
@@ -126,16 +128,12 @@ export class ApiTestingCheck implements Check<ApiCheckData> {
         if (httpStatus !== expectedStatus) {
           isPass = false;
           messages.push(`Expected HTTP ${expectedStatus}, got ${httpStatus}`);
-        } else {
-          messages.push(`Status: ${httpStatus}`);
         }
 
         // 2. Validate Response Time
         if (expectedResponseTime && responseTime > expectedResponseTime) {
           isPass = false;
           messages.push(`Response time ${responseTime}ms exceeded limit (${expectedResponseTime}ms)`);
-        } else {
-          messages.push(`${responseTime}ms`);
         }
 
         // 3. Validate Required Fields in JSON
@@ -150,12 +148,17 @@ export class ApiTestingCheck implements Check<ApiCheckData> {
             if (missingFields.length > 0) {
               isPass = false;
               messages.push(`Missing required field(s): ${missingFields.join(", ")}`);
-            } else {
-              messages.push(`${requiredFields.length} field(s) verified`);
             }
           } catch {
             isPass = false;
             messages.push("Response was not valid JSON");
+          }
+        }
+
+        if (isPass) {
+          messages.push(`Status: ${httpStatus}`);
+          if (requiredFields.length > 0) {
+            messages.push(`${requiredFields.length} field(s) verified`);
           }
         }
       } catch (err) {
@@ -189,18 +192,30 @@ export class ApiTestingCheck implements Check<ApiCheckData> {
     const score = total > 0 ? Math.round((passed / total) * 100) : 100;
     const overallStatus = failed === 0 ? "PASS" : "FAIL";
 
+    const testedEndpointsSet = new Set(
+      results.map((r) => {
+        const pathOnly = r.url.replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0] || r.url;
+        const normPath = pathOnly.startsWith("/") ? pathOnly : `/${pathOnly}`;
+        return `${r.method} ${normPath}`;
+      })
+    );
+    const testedEndpoints = [...testedEndpointsSet];
+    const testedEndpointsCount = testedEndpoints.length;
+
     return {
       name: this.name,
       category: "api",
       status: overallStatus,
       score,
-      message: `${passed}/${total} API test(s) passed`,
+      message: `${passed}/${total} API test(s) passed (${testedEndpointsCount} distinct endpoint(s) tested)`,
       duration: performance.now() - started,
       data: {
         total,
         passed,
         failed,
         results,
+        testedEndpointsCount,
+        testedEndpoints,
       },
     };
   }
