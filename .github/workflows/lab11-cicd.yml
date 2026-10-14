@@ -1,0 +1,42 @@
+name: Lab 11 CI/CD integration
+on:
+  push:
+    branches: [testing-branch]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lab11:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            tests/fixtures/lab11-cicd/package-lock.json
+      - name: Install CLI source dependencies
+        run: npm ci
+      - name: Install Chromium and native dependencies
+        run: node ./node_modules/playwright/cli.js install --with-deps chromium
+      - name: Select installed Chromium for Lighthouse
+        run: |
+          node --input-type=module -e "import {chromium} from 'playwright'; import fs from 'node:fs'; fs.appendFileSync(process.env.GITHUB_ENV, 'CHROME_PATH=' + chromium.executablePath() + '\n');"
+          echo "npm_execpath=$(readlink -f "$(command -v npm)")" >> "$GITHUB_ENV"
+      - name: Build checked-out CLI
+        run: npm run build
+      - name: Verify clean, regression and recovery scenarios
+        run: node tests/integration/lab11-cicd.mjs
+      - name: Upload all scenario reports and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab11-cicd-evidence
+          path: test-reports/lab11-cicd/
+          if-no-files-found: error
+          retention-days: 14
