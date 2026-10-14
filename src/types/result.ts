@@ -1,6 +1,34 @@
 import type { IssueCategory, QAIssue } from "./issue.js";
 
-export type CheckStatus = "PASS" | "FAIL" | "WARNING" | "SKIPPED" | "ERROR" | "NOT_APPLICABLE";
+export type CheckStatus =
+  | "PASS"
+  | "FAIL"
+  | "WARNING"
+  | "SKIPPED"
+  | "ERROR"
+  | "NOT_APPLICABLE"
+  | "PARTIAL"
+  | "TIMEOUT"
+  | "BLOCKED";
+
+export interface PageAuditSummary {
+  eligible: number;
+  attempted: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  timedOut: number;
+  blocked: number;
+  unverified: number;
+}
+
+export interface PerRouteTargetAudit {
+  route: string;
+  status: "PASSED" | "FAILED" | "TIMED_OUT" | "BLOCKED" | "SKIPPED";
+  durationMs?: number;
+  issuesCount?: number;
+  errorMessage?: string;
+}
 
 export interface CheckResult<T = unknown> {
   name: string;
@@ -16,6 +44,8 @@ export interface CheckResult<T = unknown> {
   pagesAttempted?: number;
   pagesCompleted?: number;
   pagesDiscovered?: number;
+  pageSummary?: PageAuditSummary;
+  routeAudits?: PerRouteTargetAudit[];
   issues?: QAIssue[];
   error?: {
     name: string;
@@ -39,13 +69,16 @@ export interface ScanCoverage {
   skipped: number;
   errors: number;
   notApplicable: number;
+  partial?: number;
+  timedOut?: number;
+  blocked?: number;
   coveragePercent: number;
 }
 
 export interface CurrentQualityGate {
   passed: boolean;
   status?: "PASSED" | "FAILED" | "INCOMPLETE";
-  confidence?: "FULL" | "PARTIAL";
+  confidence?: "FULL" | "PARTIAL" | "FAST_PROFILE";
   confidencePercent?: number;
   reasons: string[];
   failingChecks: string[];
@@ -66,11 +99,13 @@ export interface AuditReport {
   checksSkipped: string[];
   checksNotApplicable?: string[];
   baseUrl?: string;
+  runtime?: import("../core/readiness.js").RuntimeDiagnostics;
   routes: string[];
   startedAt: string;
   finishedAt: string;
   duration: number;
   overallScore: number;
+  scoreEvidence?: { status: "COMPLETE" | "PROVISIONAL" | "INSUFFICIENT_EVIDENCE"; observedScore: number | null; missingScanners: string[]; warning?: string };
   coverage?: ScanCoverage;
   currentQualityGate?: CurrentQualityGate;
   rawObservations?: number;
@@ -82,6 +117,8 @@ export interface AuditReport {
 }
 
 export interface HistorySnapshot {
+  comparable?: boolean;
+  executionKey?: string;
   version: number;
   projectPath: string;
   framework: string;
@@ -100,6 +137,8 @@ export interface HistorySnapshot {
 }
 
 export interface HistoryTrend {
+  comparable?: boolean;
+  reason?: string;
   historyDir?: string;
   runs: HistorySnapshot[];
   scoreDelta?: number;
@@ -127,7 +166,7 @@ export interface CategoryScoreComparison {
   previousScore: number;
   delta: number;
   tolerance?: number;
-  status: "STABLE" | "REGRESSED" | "IMPROVED";
+  status: "STABLE" | "REGRESSED" | "IMPROVED" | "INCOMPARABLE";
 }
 
 export interface RegressionQualityGate {

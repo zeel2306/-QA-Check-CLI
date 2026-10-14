@@ -24,6 +24,7 @@ export async function runCommand(
       // npm.cmd/npx.cmd are directly executable on Windows. Running them through
       // another shell changes the process tree and is unnecessary.
       shell: false,
+      stdin: "ignore",
     });
 
     if (process.env.QA_CHECK_DEBUG === "1" || process.env.DEBUG === "true" || process.env.DEBUG === "1") {

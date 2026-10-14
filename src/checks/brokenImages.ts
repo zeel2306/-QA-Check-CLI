@@ -1,3 +1,4 @@
+import { SOURCE_GLOB_IGNORE } from "../utils/sourcePolicy.js";
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
@@ -26,6 +27,8 @@ export class BrokenImagesCheck extends BrowserCheck {
     const staticWarnings: BrokenImageIssue[] = [];
     const runtimeMissing: BrokenImageIssue[] = [];
     const runtimeWarnings: BrokenImageIssue[] = [];
+    const sourceCandidates: BrokenImageIssue[] = [];
+    const unconditionalAssets = new Set<string>();
 
     // 1. Static analysis of local HTML and JS/JSX/TS/TSX files for image assets
     let htmlFiles: string[] = [];
@@ -33,12 +36,12 @@ export class BrokenImagesCheck extends BrowserCheck {
     try {
       htmlFiles = await fg(["**/*.html"], {
         cwd: projectPath,
-        ignore: ["**/node_modules/**", "**/reports/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/.git/**"],
+        ignore: [...SOURCE_GLOB_IGNORE, "**/storage/**"],
       });
 
       jsFiles = await fg(["src/**/*.{js,jsx,ts,tsx,vue}", "app/**/*.{js,jsx,ts,tsx,vue}"], {
         cwd: projectPath,
-        ignore: ["**/node_modules/**", "**/reports/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/.git/**"],
+        ignore: [...SOURCE_GLOB_IGNORE, "**/storage/**"],
       });
 
       const checkAssetExists = (rawSrc: string, baseDir: string): boolean => {
@@ -99,22 +102,30 @@ export class BrokenImagesCheck extends BrowserCheck {
       for (const relJsPath of jsFiles) {
         const fullJsPath = path.join(projectPath, relJsPath);
         const content = await fsp.readFile(fullJsPath, "utf8").catch(() => "");
-        const imgMatches = content.matchAll(/<img\b[^>]*\b(?:src|\[src\]|:src|v-bind:src)\s*=\s*(?:["']([^"']+)["']|\{?["']([^"']+)["']\}?)/gi);
+        const rawSrcs = new Set<string>();
+        // Conservative: conditional/control-flow references require rendered evidence.
+        // This does not evaluate application state or assume either branch is active.
+        const conditionalSource = /\?|&&|\|\||\b(?:if|switch|for|while)\s*\(|\bv-if\b/.test(content);
 
+        // 1. Matches <img src="..."> in templates/JSX/Vue
+        const imgMatches = content.matchAll(/<img\b[^>]*\b(?:src|\[src\]|:src|v-bind:src)\s*=\s*(?:["']([^"']+)["']|\{?["']([^"']+)["']\}?)/gi);
         for (const match of imgMatches) {
           let rawSrc = (match[1] ?? match[2])?.trim();
-          if (rawSrc) {
-            rawSrc = rawSrc.replace(/^['"\[\s]+|['"\]\s]+$/g, "");
-          }
-          if (!rawSrc) continue;
+          if (rawSrc && !conditionalSource) unconditionalAssets.add(`${relJsPath}:${rawSrc.replace(/^[\'"\[\s]+|[\'"\]\s]+$/g, "")}`);
+          if (rawSrc) rawSrcs.add(rawSrc.replace(/^['"\[\s]+|['"\]\s]+$/g, ""));
+        }
 
-          if (rawSrc.startsWith("data:") || /^https?:\/\//i.test(rawSrc)) continue;
+        // 2. Matches string literals pointing to static image assets (e.g. '/missing-vue-hero.jpg')
+        const strMatches = content.matchAll(/(?:["'])([^"']+\.(?:png|jpe?g|gif|svg|webp|avif|ico))["']/gi);
+        for (const match of strMatches) {
+          if (match[1]) rawSrcs.add(match[1].trim());
+        }
 
-          // Only validate string literal paths (e.g. /assets/hero-missing.jpg or ./logo.png)
-          if (!/\.(png|jpe?g|gif|svg|webp|avif|ico)(\?.*)?$/i.test(rawSrc) && !rawSrc.startsWith("/")) continue;
+        for (const rawSrc of rawSrcs) {
+          if (!rawSrc || rawSrc.startsWith("data:") || /^https?:\/\//i.test(rawSrc)) continue;
 
           if (!checkAssetExists(rawSrc, path.dirname(fullJsPath))) {
-            staticMissing.push({
+            sourceCandidates.push({
               type: "missing-image-asset",
               file: relJsPath,
               route: relJsPath,
@@ -130,8 +141,10 @@ export class BrokenImagesCheck extends BrowserCheck {
 
     // 2. Perform runtime image response audit if browser audit is available
     let auditImagesCount = 0;
+    let runtimeAvailable = false;
     try {
       const audit = await this.audit();
+      runtimeAvailable = Boolean(audit?.seo?.length);
       if (audit && audit.images && audit.images.length > 0) {
         auditImagesCount = audit.images.length;
         for (const img of audit.images) {
@@ -160,8 +173,16 @@ export class BrokenImagesCheck extends BrowserCheck {
     } catch {
       // Browser audit unavailable
     }
+    // Source strings establish disk references, not whether a conditional branch
+    // was rendered. When runtime evidence exists it is authoritative for JSX.
+    const runtimeFailedAssets = new Set(runtimeMissing.map(image => toCanonicalAssetPath(image.url, image.route)));
+    const unverifiedCandidates: BrokenImageIssue[] = [];
+    for (const candidate of sourceCandidates) {
+      if (runtimeAvailable ? runtimeFailedAssets.has(toCanonicalAssetPath(candidate.url, candidate.route)) : unconditionalAssets.has(`${candidate.file}:${candidate.url}`)) staticMissing.push(candidate);
+      else unverifiedCandidates.push(candidate);
+    }
 
-    if (htmlFiles.length === 0 && staticMissing.length === 0 && staticWarnings.length === 0 && auditImagesCount === 0 && runtimeMissing.length === 0) {
+    if (htmlFiles.length === 0 && staticMissing.length === 0 && staticWarnings.length === 0 && auditImagesCount === 0 && runtimeMissing.length === 0 && unverifiedCandidates.length === 0) {
       return {
         name: this.name,
         status: "NOT_APPLICABLE",
@@ -186,7 +207,8 @@ export class BrokenImagesCheck extends BrowserCheck {
     const pagesAttempted = runtimePageCount || htmlFiles.length || jsFiles.length || auditImagesCount;
     const pagesCompleted = pagesAttempted;
 
-    const status = missingAssets.length ? "FAIL" : warnings.length ? "WARNING" : "PASS";
+    const incomplete = !runtimeAvailable && unverifiedCandidates.length > 0;
+    const status = missingAssets.length ? "FAIL" : incomplete ? "PARTIAL" : warnings.length ? "WARNING" : "PASS";
     const message = missingAssets.length
       ? `${pagesCompleted}/${pagesAttempted} pages audited — ${missingAssets.length} missing image asset(s)`
       : `${pagesCompleted}/${pagesAttempted} pages audited — 0 image issues`;
@@ -194,11 +216,12 @@ export class BrokenImagesCheck extends BrowserCheck {
     return {
       name: this.name,
       status,
-      score: missingAssets.length ? Math.max(0, 100 - missingAssets.length * 20) : 100,
-      message,
+      score: incomplete && !missingAssets.length ? null : missingAssets.length ? Math.max(0, 100 - missingAssets.length * 20) : 100,
+      message: incomplete ? `${message}; conditional/source-only image references require runtime verification` : message,
       duration: Math.round(performance.now() - started),
       pagesAttempted,
       pagesCompleted,
+      metadata: { unverifiedSourceCandidates: unverifiedCandidates, runtimeEvidenceAvailable: runtimeAvailable },
       data: {
         totalIssues: missingAssets.length + warnings.length,
         issues: [...missingAssets, ...warnings],

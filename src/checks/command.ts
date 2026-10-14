@@ -31,9 +31,16 @@ export class CommandCheck implements Check<LegacyResult> {
       const total = data.totalIssues ?? (Array.isArray(data.issues) ? data.issues.length : 0);
 
       issues = data.issues;
-      status = total === 0 ? "PASS" : "FAIL";
-      score = total === 0 ? 100 : Math.max(0, 100 - (errorCount * 25 + warningCount * 5));
-      message = total === 0 ? "Passed" : `${total} findings — ${errorCount} errors, ${warningCount} warnings`;
+      const setupPrompt = /how would you like to configure|would you like to install|create an eslint|eslint configuration.*not found/i.test(`${data.stdout}\n${data.stderr}`);
+      if (setupPrompt || data.exitCode !== 0 && data.exitCode !== 1 || (!data.success || data.exitCode !== 0) && total === 0) {
+        status = "ERROR";
+        score = null;
+        message = setupPrompt ? "ESLint requested interactive setup; linting did not execute" : `ESLint failed (exit ${data.exitCode}); ${total ? "execution was incomplete; retained available findings" : "no verified lint findings were produced"}: ${data.stderr || data.stdout}`;
+      } else {
+        status = total === 0 ? "PASS" : "FAIL";
+        score = total === 0 ? 100 : Math.max(0, 100 - (errorCount * 25 + warningCount * 5));
+        message = total === 0 ? "Passed" : `${total} findings — ${errorCount} errors, ${warningCount} warnings`;
+      }
     } else if (unavailable) {
       if (this.name === "TypeScript" && (data.stderr?.includes("No tsconfig.json") || data.stderr?.includes("not installed"))) {
         status = "NOT_APPLICABLE";

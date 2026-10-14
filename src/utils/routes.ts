@@ -51,6 +51,10 @@ export function matchesDeclaredRoute(url: string, declaration: string): boolean 
       minimum = 0;
     } else if (/^\[[^\]]+\]$/.test(segment)) {
       // One required file-router parameter.
+    } else if (/^\{[^}]+\}$/.test(segment)) {
+      const isOptional = segment.endsWith("?}") || segment.includes("?");
+      minimum = isOptional ? 0 : 1;
+      maximum = 1;
     } else if (segment.startsWith(":")) {
       const parameter = /^:[\w]+(?:\((.*)\))?([?*+]?)$/.exec(segment);
       if (!parameter) return false;

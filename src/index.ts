@@ -5,6 +5,7 @@ import { loadConfig } from "./core/config.js";
 import { printCommandGuide, printHelp } from "./core/help.js";
 import { initializeProject } from "./core/init.js";
 import { getProfileOptions, isQaProfile } from "./core/profile.js";
+import { lighthouseRouteTimeout } from "./core/lighthouseSettings.js";
 
 function appendOption(values: string[] | undefined, value: string | undefined): string[] {
   return [...(values ?? []), ...(value ? value.split(",").map((item) => item.trim()).filter(Boolean) : [])];
@@ -194,6 +195,15 @@ const explicitOptions: QaEngineOptions = {};
     const arg = args[i];
 
     switch (arg) {
+      case "--lighthouse-route-timeout-ms":
+        explicitOptions.lighthouseRouteTimeoutMs = lighthouseRouteTimeout(Number(args[++i]));
+        break;
+      case "--lighthouse-budget-ms": {
+        const value = Number(args[++i]);
+        if (!Number.isInteger(value) || value < 1 || value > 600_000) throw new Error("lighthouseBudgetMs must be a positive integer no greater than 600000");
+        explicitOptions.lighthouseBudgetMs = value;
+        break;
+      }
       case "--ci":
         explicitOptions.ci = true;
         break;
@@ -388,7 +398,7 @@ const exitCode = getExitCode(
 if (finalOptions.ci) {
   console.log("CI Mode:", finalOptions.ci);
   console.log("Exit Code:", exitCode);
-  process.exitCode = exitCode;
+  if (process.exitCode !== 130) process.exitCode = exitCode;
 } else {
   printCommandGuide(resolvedProjectPath);
 }

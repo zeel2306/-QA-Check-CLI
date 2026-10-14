@@ -4,6 +4,7 @@ import fg from "fast-glob";
 import { BrowserCheck } from "./base.js";
 import type { BrowserIssue, CheckResult } from "../types/result.js";
 import { deduplicateFindings, toCanonicalRoute } from "../core/canonical.js";
+import { SOURCE_GLOB_IGNORE } from "../utils/sourcePolicy.js";
 
 export class SeoCheck extends BrowserCheck {
   readonly name = "SEO";
@@ -15,13 +16,14 @@ export class SeoCheck extends BrowserCheck {
 
     let pagesAttempted = 0;
     let pagesCompleted = 0;
+    let runtimeError: string | undefined;
 
     // 1. Static HTML page-level SEO analysis
     let htmlFiles: string[] = [];
     try {
       htmlFiles = await fg(["**/*.html"], {
         cwd: projectPath,
-        ignore: ["**/node_modules/**", "**/reports/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/.git/**"],
+        ignore: [...SOURCE_GLOB_IGNORE],
       });
 
       for (const relHtmlPath of htmlFiles) {
@@ -125,16 +127,16 @@ export class SeoCheck extends BrowserCheck {
           }
         }
       }
-    } catch {
-      // Runtime audit unavailable
+    } catch (error) {
+      runtimeError = error instanceof Error ? error.message : String(error);
     }
 
     if (pagesCompleted === 0) {
       return {
         name: this.name,
-        status: "NOT_APPLICABLE",
+        status: runtimeError ? "BLOCKED" : "NOT_APPLICABLE",
         score: null,
-        message: "No pages or HTML files audited for SEO",
+        message: runtimeError || "No pages or HTML files audited for SEO",
         skipReason: "No HTML files or runtime target available",
         duration: Math.round(performance.now() - started),
         pagesAttempted: 0,
@@ -151,7 +153,7 @@ export class SeoCheck extends BrowserCheck {
 
     const inspectedPages = Math.max(pagesCompleted, 1);
     const score = Math.max(0, Math.round(100 - (deduplicated.length / inspectedPages) * 15));
-    const status = deduplicated.length === 0 ? "PASS" : score >= 70 ? "WARNING" : "FAIL";
+    const status = runtimeError ? "PARTIAL" : deduplicated.length === 0 ? "PASS" : score >= 70 ? "WARNING" : "FAIL";
 
     const grouped = deduplicated.reduce((acc, issue) => {
       const typeKey = issue.type || "unknown";

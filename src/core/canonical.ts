@@ -221,7 +221,8 @@ export type CanonicalCategory =
   | "Build"
   | "TypeScript"
   | "ESLint"
-  | "API Testing";
+  | "API Testing"
+  | "Security";
 
 export interface CanonicalObservation {
   checkName: string;
@@ -244,7 +245,7 @@ export function correlateCanonicalDefects(results: any[]): CanonicalDefect[] {
   const map = new Map<string, CanonicalDefect>();
 
   for (const result of results || []) {
-    if (!result || result.status === "PASS" || result.status === "NOT_APPLICABLE" || result.status === "SKIPPED") continue;
+    if (!result || ["PASS", "NOT_APPLICABLE", "SKIPPED", "BLOCKED", "ERROR", "TIMEOUT"].includes(result.status)) continue;
 
     const checkName = result.name;
 
@@ -377,8 +378,15 @@ export function correlateCanonicalDefects(results: any[]): CanonicalDefect[] {
           const method = (item.method || "GET").toUpperCase();
           const target = `${method} ${toCanonicalRoute(pathOnly)}`;
           const title = `API Contract Failure: ${item.name}`;
-          addObs("API Testing", title, target, "API Testing", item.message || title, toCanonicalRoute(pathOnly), item.url);
+          addObs("API Testing", title, `${target} [${item.name}]`, "API Testing", item.message || title, toCanonicalRoute(pathOnly), item.url);
         }
+      }
+    } else if (checkName === "Laravel Security") {
+      const findings = Array.isArray(result.data?.findings) ? result.data.findings : [];
+      for (const item of findings) {
+        const target = item.target || item.file || item.ruleId || "security";
+        const title = `Security [${item.ruleId}]: ${item.evidence || item.explanation}`;
+        addObs("Security", title, `${item.ruleId}:${target}`, "Laravel Security", item.explanation || item.evidence, item.file, item.target);
       }
     } else {
       const category: CanonicalCategory =
@@ -387,7 +395,8 @@ export function correlateCanonicalDefects(results: any[]): CanonicalDefect[] {
         checkName.includes("Responsive") ? "Responsive" :
         checkName.includes("TypeScript") ? "TypeScript" :
         checkName.includes("Build") ? "Build" :
-        checkName.includes("Performance") ? "Performance" : "Code Quality";
+        checkName.includes("Performance") ? "Performance" :
+        checkName.includes("Security") ? "Security" : "Code Quality";
 
       const issues = Array.isArray(result.data?.issues) ? result.data.issues : [];
       if (issues.length > 0) {
@@ -396,11 +405,24 @@ export function correlateCanonicalDefects(results: any[]): CanonicalDefect[] {
           const title = item.type ? item.type.replace(/[-_]/g, " ").replace(/\b\w/g, (l: string) => l.toUpperCase()) : `${checkName} Issue`;
           addObs(category, title, `${checkName}:${target}`, checkName, item.message || title, item.route || item.file);
         }
-      } else if (result.message && typeof result.score !== "number") {
-        addObs(category, `${checkName} Warning`, `${checkName}:${result.message}`, checkName, result.message);
       }
     }
   }
 
   return [...map.values()];
+}
+
+/** Align static HTML source observations with routes actually selected for runtime auditing. */
+export function alignSourceRoutes(result: any, runtimeRoutes: string[]): void {
+  if (!Array.isArray(result.data?.issues)) return;
+  for (const issue of result.data.issues) {
+    const source = String(issue.route || "").replaceAll("\\", "/");
+    const staticEvidence = issue.sources?.includes("static") || issue.file;
+    if ((source.startsWith("/") && !staticEvidence) || !source.endsWith(".html")) continue;
+    const relative = source.replace(/^\//, "");
+    const served = "/" + relative.replace(/^(?:public|static)\//, "");
+    const candidates = [served === "/index.html" ? "/" : served, served.slice(0, -5), "/" + relative];
+    const matching = candidates.find((route) => runtimeRoutes.includes(route));
+    if (matching) issue.route = matching;
+  }
 }

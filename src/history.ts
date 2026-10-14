@@ -1,5 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
+import { createHash } from "node:crypto";
+import { isScannerComparable } from "./baseline/compare.js";
 import type { AuditReport, CheckResult, HistorySnapshot, HistoryTrend } from "./types/result.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -41,7 +43,10 @@ function countByStatus(report: AuditReport): HistorySnapshot["counts"] {
 }
 
 export function createHistorySnapshot(report: AuditReport): HistorySnapshot {
+  const applicable = report.results.filter(result => result.status !== "NOT_APPLICABLE");
   return {
+    comparable: applicable.length > 0 && applicable.every(isScannerComparable),
+    executionKey: createHash("sha256").update(JSON.stringify({ project: report.projectPath, pipeline: report.pipeline, routes: report.routes, scanners: report.results.filter(result => result.status !== "NOT_APPLICABLE").map(result => [result.name, result.metadata?.scopeKey]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))) })).digest("hex"),
     version: report.version,
     projectPath: report.projectPath,
     framework: report.framework,
@@ -95,7 +100,9 @@ export function createHistoryTrend(
   historyDir?: string,
 ): HistoryTrend | undefined {
   const previous = previousSnapshots.at(-1);
-  const recent = [...previousSnapshots.slice(-9), createHistorySnapshot(current)];
+  const snapshot = createHistorySnapshot(current);
+  const recent = [...previousSnapshots.slice(-9), snapshot];
+  const comparable = Boolean(previous?.comparable && snapshot.comparable && previous.executionKey === snapshot.executionKey);
 
   if (!previous && recent.length <= 1) {
     return {
@@ -107,9 +114,11 @@ export function createHistoryTrend(
   return {
     historyDir,
     runs: recent,
-    scoreDelta: previous ? current.overallScore - previous.overallScore : undefined,
-    issueDelta: previous
-      ? createHistorySnapshot(current).totalIssues - previous.totalIssues
+    comparable,
+    reason: comparable ? undefined : "INCOMPARABLE: missing execution evidence, changed scope, or legacy history without coverage metadata. No quality improvement or fixed-defect trend can be inferred.",
+    scoreDelta: comparable ? current.overallScore - previous!.overallScore : undefined,
+    issueDelta: comparable
+      ? snapshot.totalIssues - previous!.totalIssues
       : undefined,
   };
 }

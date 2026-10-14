@@ -38,6 +38,8 @@ function getIssueCount(result: CheckResult): number {
 
   if (Array.isArray(data)) return data.length;
   if (!isRecord(data)) return 0;
+  if (Array.isArray(data.findings)) return data.findings.length;
+  if (typeof data.failed === "number") return data.failed;
   if (typeof data.totalIssues === "number") return data.totalIssues;
   if (Array.isArray(data.issues)) return data.issues.length;
 
@@ -48,7 +50,12 @@ function getIssueCount(result: CheckResult): number {
 
 export function isScannerComparable(result: CheckResult | undefined): boolean {
   if (!result) return false;
+  if (result.metadata?.incompleteScope) return false;
   return result.status === "PASS" || result.status === "WARNING" || result.status === "FAIL";
+}
+
+function scopesMatch(current: CheckResult | undefined, previous: CheckResult | undefined): boolean {
+  return current?.metadata?.scopeKey === previous?.metadata?.scopeKey;
 }
 
 function normalizePathOrUrl(input?: string): string {
@@ -116,6 +123,7 @@ export function buildNormalizedFingerprint(
       canonicalRoute,
       method || "",
       canonicalTarget,
+      checkName === "API Testing" ? String(item.name || "") : "",
       line || "",
     ].join("|");
 
@@ -144,6 +152,13 @@ export function buildNormalizedFingerprint(
 }
 
 function extractIssuesFromCheck(result: CheckResult): FingerprintedIssue[] {
+  if (result.name === "Route Discovery") return [];
+  if (isRecord(result.data) && result.name === "Laravel Security" && Array.isArray(result.data.findings)) {
+    return result.data.findings.map((item) => buildNormalizedFingerprint(result.name, item)?.issue).filter((item): item is FingerprintedIssue => Boolean(item));
+  }
+  if (isRecord(result.data) && result.name === "API Testing" && Array.isArray(result.data.results)) {
+    return result.data.results.filter((item) => isRecord(item) && item.status === "FAIL").map((item) => buildNormalizedFingerprint(result.name, item)?.issue).filter((item): item is FingerprintedIssue => Boolean(item));
+  }
   if (result.name.startsWith("Lighthouse") || result.name === "Performance") {
     return [];
   }
@@ -171,9 +186,12 @@ function extractIssuesFromCheck(result: CheckResult): FingerprintedIssue[] {
         for (const item of result.data.issues) addIssue(item);
       } else {
         for (const [key, val] of Object.entries(result.data)) {
-          if (["issues", "grouped", "screenshots", "skippedRoutes", "measurements"].includes(key)) continue;
+          if (["issues", "grouped", "screenshots", "skippedRoutes", "measurements", "testedEndpoints", "routes", "routesDiscovered", "browserRoutesResolved", "apiRoutesDiscovered", "dynamicRoutesUnresolved"].includes(key)) continue;
           if (Array.isArray(val)) {
-            for (const item of val) addIssue(item, key);
+            for (const item of val) {
+              if (key === "results" && isRecord(item) && item.status !== "FAIL") continue;
+              addIssue(item, key);
+            }
           }
         }
       }
@@ -214,7 +232,7 @@ export function compareWithBaseline(
       baselinePath,
       currentRun: current.finishedAt,
       previousRun: previous.finishedAt,
-      overallScore: { current: current.overallScore, previous: previous.overallScore, delta: current.overallScore - previous.overallScore },
+      overallScore: { current: current.overallScore, previous: previous.overallScore, delta: 0 },
       totalIssues: { current: 0, previous: 0, delta: 0 },
       qualityGate: {
         passed: false,
@@ -284,8 +302,9 @@ export function compareWithBaseline(
       continue;
     }
 
-    const prevComp = isScannerComparable(prevRes);
-    const curComp = isScannerComparable(curRes);
+    const sameScope = scopesMatch(curRes, prevRes);
+    const prevComp = isScannerComparable(prevRes) && sameScope;
+    const curComp = isScannerComparable(curRes) && sameScope;
 
     if (prevRes && curRes && prevRes.status !== curRes.status) {
       if (!prevComp || !curComp) {
@@ -300,7 +319,9 @@ export function compareWithBaseline(
 
     if (!prevComp || !curComp) {
       let reason = "";
-      if (!prevRes) {
+      if (prevRes && curRes && !sameScope) {
+        reason = "Scanner target/configuration scope changed; application findings cannot be compared.";
+      } else if (!prevRes) {
         reason = `Previous ${name} scan result was missing.`;
       } else if (!prevComp) {
         reason = `Previous ${name} scan did not complete successfully (status: ${prevRes.status}).`;
@@ -399,6 +420,7 @@ export function compareWithBaseline(
   ];
 
   for (const { key, name } of lighthouseMetrics) {
+    if (!isScannerComparable(curLighthouse) || !isScannerComparable(prevLighthouse) || !scopesMatch(curLighthouse, prevLighthouse)) continue;
     const cur = curCategoryScores[key] ?? (key === "performance" ? curLighthouse?.score ?? undefined : undefined);
     const prev = prevCategoryScores[key] ?? (key === "performance" ? prevLighthouse?.score ?? undefined : undefined);
 
@@ -425,7 +447,7 @@ export function compareWithBaseline(
   // Performance timings metric changes
   const curPerf = current.results.find((r) => r.name === "Performance");
   const prevPerf = previous.results.find((r) => r.name === "Performance");
-  if (curPerf && prevPerf && isRecord(curPerf.data) && isRecord(prevPerf.data)) {
+  if (curPerf && prevPerf && isScannerComparable(curPerf) && isScannerComparable(prevPerf) && scopesMatch(curPerf, prevPerf) && isRecord(curPerf.data) && isRecord(prevPerf.data)) {
     const curMeas = Array.isArray(curPerf.data.measurements) ? curPerf.data.measurements : [];
     const prevMeas = Array.isArray(prevPerf.data.measurements) ? prevPerf.data.measurements : [];
     const prevMap = new Map<string, { route: string; load: number; ttfb: number }>(
@@ -460,13 +482,25 @@ export function compareWithBaseline(
     }
   }
 
+  // Check for scope mismatch across executed scanners
+  let hasScopeMismatch = false;
+  for (const name of allScannerNames) {
+    const curRes = currentChecks.get(name);
+    const prevRes = previousChecks.get(name);
+    if (curRes?.status === "NOT_APPLICABLE" && prevRes?.status === "NOT_APPLICABLE") continue;
+    if (!isScannerComparable(curRes) || !isScannerComparable(prevRes) || !scopesMatch(curRes, prevRes)) {
+      hasScopeMismatch = true;
+      break;
+    }
+  }
+
   // Category Score Comparison
   const categoriesToGroup: { category: string; checkNames: string[] }[] = [
     { category: "Quality", checkNames: current.results.map((r) => r.name) },
-    { category: "Performance", checkNames: ["Performance", "Lighthouse"] },
+    { category: "Performance", checkNames: ["Performance", "Lighthouse", "Lighthouse Performance"] },
     { category: "Accessibility", checkNames: ["Accessibility"] },
     { category: "SEO", checkNames: ["SEO"] },
-    { category: "API & E2E", checkNames: ["REST API Testing", "E2E Flow Testing"] },
+    { category: "API & E2E", checkNames: ["API Testing", "REST API Testing", "E2E Flow Testing"] },
     { category: "Code & Build", checkNames: ["Build", "ESLint", "TypeScript"] },
     { category: "Responsive & UI", checkNames: ["Responsive"] },
   ];
@@ -478,29 +512,46 @@ export function compareWithBaseline(
     let currentScore = 0;
     let previousScore = 0;
     let delta = 0;
+    let status: "STABLE" | "IMPROVED" | "REGRESSED" | "INCOMPARABLE" = "STABLE";
 
     if (catGroup.category === "Quality") {
       currentScore = current.overallScore;
       previousScore = previous.overallScore;
-      delta = currentScore - previousScore;
+      if (hasScopeMismatch) {
+        delta = 0;
+        status = "INCOMPARABLE";
+      } else {
+        delta = currentScore - previousScore;
+        if (delta > 0) status = "IMPROVED";
+        else if (delta < -AGGREGATE_SCORE_TOLERANCE) status = "REGRESSED";
+        else status = "STABLE";
+      }
     } else {
       const curGroupChecks = current.results.filter((r) => catGroup.checkNames.includes(r.name));
       const prevGroupChecks = previous.results.filter((r) => catGroup.checkNames.includes(r.name));
 
-      if (curGroupChecks.length === 0 || prevGroupChecks.length === 0) continue;
+      const isGroupComparable =
+        curGroupChecks.length > 0 &&
+        prevGroupChecks.length > 0 &&
+        curGroupChecks.length === prevGroupChecks.length &&
+        curGroupChecks.every((r) => prevGroupChecks.some((p) => p.name === r.name)) &&
+        curGroupChecks.every((r) => scopesMatch(r, previousChecks.get(r.name))) &&
+        curGroupChecks.every((r) => isScannerComparable(r)) &&
+        prevGroupChecks.every((r) => isScannerComparable(r));
 
-      currentScore = Math.round(curGroupChecks.reduce((sum, r) => sum + getScore(r), 0) / curGroupChecks.length);
-      previousScore = Math.round(prevGroupChecks.reduce((sum, r) => sum + getScore(r), 0) / prevGroupChecks.length);
-      delta = currentScore - previousScore;
-    }
-
-    let status: "STABLE" | "IMPROVED" | "REGRESSED" = "STABLE";
-    if (delta > 0) {
-      status = "IMPROVED";
-    } else if (delta < -AGGREGATE_SCORE_TOLERANCE) {
-      status = "REGRESSED";
-    } else {
-      status = "STABLE";
+      if (curGroupChecks.length === 0 || prevGroupChecks.length === 0 || !isGroupComparable) {
+        currentScore = curGroupChecks.length > 0 ? Math.round(curGroupChecks.reduce((sum, r) => sum + getScore(r), 0) / curGroupChecks.length) : 0;
+        previousScore = prevGroupChecks.length > 0 ? Math.round(prevGroupChecks.reduce((sum, r) => sum + getScore(r), 0) / prevGroupChecks.length) : 0;
+        delta = 0;
+        status = "INCOMPARABLE";
+      } else {
+        currentScore = Math.round(curGroupChecks.reduce((sum, r) => sum + getScore(r), 0) / curGroupChecks.length);
+        previousScore = Math.round(prevGroupChecks.reduce((sum, r) => sum + getScore(r), 0) / prevGroupChecks.length);
+        delta = currentScore - previousScore;
+        if (delta > 0) status = "IMPROVED";
+        else if (delta < -AGGREGATE_SCORE_TOLERANCE) status = "REGRESSED";
+        else status = "STABLE";
+      }
     }
 
     categoryScores.push({
@@ -517,11 +568,33 @@ export function compareWithBaseline(
   const reasons: string[] = [];
   const regressedMetrics = metricChanges.filter((m) => m.status === "REGRESSED");
   const regressedCategories = categoryScores.filter((c) => c.status === "REGRESSED");
-  const overallDelta = current.overallScore - previous.overallScore;
+
+  let overallDelta = current.overallScore - previous.overallScore;
+  if (hasScopeMismatch) {
+    const overlappingScannerNames = [...allScannerNames].filter((name) => {
+      const c = currentChecks.get(name);
+      const p = previousChecks.get(name);
+      return isScannerComparable(c) && isScannerComparable(p) && scopesMatch(c, p);
+    });
+
+    if (overlappingScannerNames.length > 0) {
+      const cOver = Math.round(overlappingScannerNames.reduce((sum, n) => sum + getScore(currentChecks.get(n)!), 0) / overlappingScannerNames.length);
+      const pOver = Math.round(overlappingScannerNames.reduce((sum, n) => sum + getScore(previousChecks.get(n)!), 0) / overlappingScannerNames.length);
+      const overDelta = cOver - pOver;
+      overallDelta = overDelta > 0 ? 0 : overDelta;
+    } else {
+      overallDelta = 0;
+    }
+  }
+
   const scoreRegressed = regressedMetrics.length > 0 || regressedCategories.length > 0 || (overallDelta < -AGGREGATE_SCORE_TOLERANCE && regressedChecks.length > 0);
 
   if (scoreRegressed) {
     reasons.push(`Overall Quality score regressed from ${previous.overallScore} to ${current.overallScore} (${current.overallScore - previous.overallScore} pts)`);
+  }
+
+  if (hasScopeMismatch) {
+    reasons.push("Scope mismatch detected between baseline and current scan: non-overlapping scanners excluded from improvement calculation.");
   }
 
   if (newIssues.length > 0) {
@@ -536,7 +609,9 @@ export function compareWithBaseline(
     reasons.push(`${regressedMetrics.length} metric(s) regressed beyond tolerance (${regressedMetrics.map((m) => m.name).join(", ")})`);
   }
 
-  const passed = !scoreRegressed && newIssues.length === 0 && regressedChecks.length === 0 && regressedMetrics.length === 0;
+  const missingEvidence = [current, previous].some(report => report.results.some(result => ["BLOCKED", "ERROR", "TIMEOUT", "PARTIAL"].includes(result.status) || result.metadata?.incompleteScope));
+  if (missingEvidence) reasons.push("Regression evidence incomplete: blocked, errored, timed-out or partial scanners cannot establish an unchanged full audit.");
+  const passed = !missingEvidence && !scoreRegressed && newIssues.length === 0 && regressedChecks.length === 0 && regressedMetrics.length === 0;
   if (passed) {
     reasons.push("Regression Gate Passed: No quality regressions or new issues detected.");
   }
@@ -556,7 +631,7 @@ export function compareWithBaseline(
     overallScore: {
       current: current.overallScore,
       previous: previous.overallScore,
-      delta: current.overallScore - previous.overallScore,
+      delta: overallDelta,
     },
     totalIssues: {
       current: currentIssuesMap.size,

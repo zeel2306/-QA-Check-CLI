@@ -29,13 +29,15 @@ function statusColor(status: CheckStatus): string {
     case "PASS":
       return COLORS.pass;
     case "WARNING":
+    case "PARTIAL":
       return COLORS.warning;
     case "FAIL":
+    case "ERROR":
+    case "TIMEOUT":
+    case "BLOCKED":
       return COLORS.fail;
     case "SKIPPED":
       return COLORS.skipped;
-    case "ERROR":
-      return COLORS.fail;
     case "NOT_APPLICABLE":
       return COLORS.muted;
   }

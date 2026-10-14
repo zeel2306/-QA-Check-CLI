@@ -37,9 +37,11 @@ export async function runCompareCommand(file1Path: string, file2Path?: string): 
   console.log(chalk.bold.white("Previous Scan → Current Scan\n"));
 
   for (const cat of comparison.categoryScores) {
-    const icon = cat.status === "REGRESSED" ? "🔴" : cat.status === "IMPROVED" ? "🟢" : "🟢";
-    const nameStr = cat.category.padEnd(14, " ");
-    const scoreStr = `${cat.previousScore} → ${cat.currentScore}`.padEnd(10, " ");
+    const icon = cat.status === "REGRESSED" ? "🔴" : cat.status === "IMPROVED" ? "🟢" : cat.status === "INCOMPARABLE" ? "⚪" : "🟢";
+    const nameStr = cat.category.padEnd(16, " ");
+    const scoreStr = cat.status === "INCOMPARABLE"
+      ? `${cat.previousScore} → ${cat.currentScore} (Incomparable)`.padEnd(28, " ")
+      : `${cat.previousScore} → ${cat.currentScore}`.padEnd(10, " ");
     console.log(`${nameStr} ${scoreStr} ${icon}`);
   }
 

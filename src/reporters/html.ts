@@ -3,6 +3,7 @@ import path from "path";
 import type { AuditReport, CheckResult, CheckStatus } from "../types/result.js";
 import { getIssueSuggestions, type IssueSuggestion } from "../suggestions/index.js";
 import { stripAnsi } from "../utils/ansi.js";
+import { assessScoreEvidence } from "../core/report.js";
 
 function escape(value: unknown): string {
   const clean = stripAnsi(String(value ?? ""));
@@ -47,12 +48,15 @@ function getStatusColor(status: CheckStatus): string {
     case "PASS":
       return "#22c55e";
     case "WARNING":
+    case "PARTIAL":
       return "#f59e0b";
     case "FAIL":
       return "#ef4444";
     case "SKIPPED":
       return "#94a3b8";
     case "ERROR":
+    case "TIMEOUT":
+    case "BLOCKED":
       return "#f43f5e";
     case "NOT_APPLICABLE":
       return "#64748b";
@@ -65,12 +69,18 @@ function statusIcon(status: CheckStatus): string {
       return "✓";
     case "WARNING":
       return "!";
+    case "PARTIAL":
+      return "◐";
     case "FAIL":
       return "×";
     case "SKIPPED":
       return "○";
     case "ERROR":
       return "×";
+    case "TIMEOUT":
+      return "⌛";
+    case "BLOCKED":
+      return "🚫";
     case "NOT_APPLICABLE":
       return "-";
   }
@@ -92,6 +102,8 @@ function renderValue(value: unknown): string {
 }
 
 function getIssueCount(result: CheckResult): number {
+  // Lighthouse's data array contains page scores, not individual defects.
+  if (result.name === "Lighthouse Performance" && Array.isArray(result.data)) return result.issues?.length ?? 0;
   if (result.status === "PASS") return 0;
   const { data } = result;
   if (Array.isArray(data)) return data.length;
@@ -112,10 +124,11 @@ function getScreenshots(report: AuditReport): string[] {
 function getAnalytics(report: AuditReport) {
   const pass = report.results.filter((result) => result.status === "PASS").length;
   const warning = report.results.filter((result) => result.status === "WARNING").length;
+  const partial = report.results.filter((result) => result.status === "PARTIAL").length;
   const fail = report.results.filter((result) => result.status === "FAIL").length;
   const skipped = report.results.filter((result) => result.status === "SKIPPED").length;
   const notApplicable = report.results.filter((result) => result.status === "NOT_APPLICABLE").length;
-  const error = report.results.filter((result) => result.status === "ERROR").length;
+  const error = report.results.filter((result) => result.status === "ERROR" || result.status === "TIMEOUT" || result.status === "BLOCKED").length;
   const scored = report.results.filter((result): result is CheckResult & { score: number } => typeof result.score === "number");
   const averageScore = scored.length
     ? Math.round(scored.reduce((total, result) => total + clampScore(result.score), 0) / scored.length)
@@ -123,7 +136,7 @@ function getAnalytics(report: AuditReport) {
   const totalIssues = report.results.reduce((total, result) => total + getIssueCount(result), 0);
   const performance = report.results.find((result) => result.name === "Performance");
 
-  return { pass, warning, fail, skipped, notApplicable, error, averageScore, totalIssues, performanceScore: performance?.score ?? 0 };
+  return { pass, warning, partial, fail, skipped, notApplicable, error, averageScore, totalIssues, performanceScore: performance?.score ?? 0 };
 }
 
 function getIssueGroupKey(item: unknown, fallback: string): string {
@@ -210,6 +223,11 @@ function renderSuggestion(suggestion: IssueSuggestion): string {
 }
 
 function renderIssueViewer(result: CheckResult): string {
+  if (result.name === "Lighthouse Performance" && Array.isArray(result.data)) {
+    const diagnostics = Array.isArray(result.metadata?.routeDiagnostics) ? result.metadata.routeDiagnostics : [];
+    const unattempted = Array.isArray(result.metadata?.unattemptedRoutes) ? result.metadata.unattemptedRoutes : [];
+    return `<h3>Audited page scores</h3><p>Scores below apply only to completed routes. Failed and untested routes have no score.</p><ul class="issue-list">${result.data.map(renderIssueItem).join("")}</ul><h3>Route execution diagnostics</h3><ul class="issue-list">${diagnostics.map(renderIssueItem).join("")}</ul>${unattempted.length ? `<p>Untested routes (score N/A): ${unattempted.map(route => escape(String(route))).join(", ")}</p>` : ""}`;
+  }
   const collections = collectIssueCollections(result);
   const suggestions = getIssueSuggestions(result);
 
@@ -304,16 +322,18 @@ function renderMeta(label: string, value: unknown): string {
 
 function renderHero(report: AuditReport): string {
   const generated = formatDate(report.finishedAt || report.startedAt);
+  const evidence = report.scoreEvidence ?? assessScoreEvidence(report.results, report.overallScore);
   return `
     <section class="hero">
       <div class="hero-copy">
         <p class="eyebrow">QA CHECK REPORT</p>
         <h1>Enterprise QA Dashboard</h1>
         <p>Quality signals, issues, screenshots, suggestions, and pipeline health in one production-ready report.</p>
+        ${evidence.warning ? `<p class="detail-note">${escape(evidence.warning)}</p>` : ""}
       </div>
-      <div class="score-orbit" style="--score:${clampScore(report.overallScore)}" title="Overall Quality Score: Weighted quality score across applicable QA categories (core categories double-weighted)">
-        <div><strong>${clampScore(report.overallScore)}</strong><span>/100</span></div>
-        <small>Overall Score</small>
+      <div class="score-orbit" style="--score:${clampScore(report.overallScore)};--score-color:${evidence.status === "COMPLETE" ? "var(--success)" : "var(--warning)"}" title="Observed quality score — ${escape(evidence.status)}; assess completeness before interpreting the score">
+        <div><strong>${evidence.status === "INSUFFICIENT_EVIDENCE" ? "N/A" : clampScore(report.overallScore)}</strong><span>/100</span></div>
+        <small>Overall Score — ${escape(evidence.status)}</small>
       </div>
       <div class="hero-meta">
         ${renderMeta("Framework", report.framework)}
@@ -322,8 +342,12 @@ function renderHero(report: AuditReport): string {
         ${renderMeta("Routes", report.routes.length)}
         ${renderMeta("Duration", formatDuration(report.duration))}
         ${renderMeta("Pipeline", report.pipeline)}
+        ${report.runtime ? renderMeta("Runtime URL", report.runtime.url ?? "Unavailable") + renderMeta("Server Ownership", report.runtime.ownership ?? "Unverified") + renderMeta("Server Startup", formatDuration(report.runtime.startupDurationMs)) + renderMeta("Application Readiness", formatDuration(report.runtime.readinessDurationMs)) + renderMeta("Browser Evidence", formatDuration(report.runtime.browserAuditDurationMs ?? 0)) + renderMeta("Runtime State", report.runtime.state) : ""}
         ${renderMeta("Project Path", report.projectPath)}
         ${renderMeta("Generated Time", generated)}
+        ${report.runtime?.cleanup ? renderMeta("Server Cleanup", report.runtime.cleanup) : ""}
+        ${typeof report.runtime?.routesDiscovered === "number" ? renderMeta("Discovered Route Inventory", report.runtime.routesDiscovered) + renderMeta("Selected Route Scope", report.runtime.routesSelected ?? 0) : ""}
+        ${report.runtime?.fallbackRoutes?.length ? renderMeta("Fallback Route Declarations (not page targets)", report.runtime.fallbackRoutes.join(", ")) : ""}
       </div>
     </section>
   `;
@@ -448,7 +472,7 @@ function renderBaseline(report: AuditReport): string {
               <strong>${escape(c.category)}</strong>
               <span>${c.previousScore} → ${c.currentScore}</span>
               <span class="badge ${c.status === "REGRESSED" ? "badge-red" : c.status === "IMPROVED" ? "badge-green" : "badge-gray"}">
-                ${c.status === "REGRESSED" ? "🔴 REGRESSED" : c.status === "IMPROVED" ? "🟢 IMPROVED" : "⚪ STABLE"}
+                ${c.status === "REGRESSED" ? "🔴 REGRESSED" : c.status === "IMPROVED" ? "🟢 IMPROVED" : `⚪ ${escape(c.status)}`}
               </span>
             </div>
           `,
@@ -668,6 +692,7 @@ function renderHistory(report: AuditReport): string {
         <div>
           <p class="eyebrow">History</p>
           <h2>Quality trend</h2>
+          ${history.reason ? `<p>${escape(history.reason)}</p>` : ""}
         </div>
         <span>${escape(`${history.runs.length} tracked run${history.runs.length === 1 ? "" : "s"}`)}</span>
       </div>
@@ -682,11 +707,11 @@ function renderHistory(report: AuditReport): string {
         </article>
         <article class="${(history.scoreDelta ?? 0) >= 0 ? "positive" : (history.scoreDelta ?? 0) >= -2 ? "neutral" : "negative"}">
           <span>Score Change</span>
-          <strong>${escape(formatDelta(history.scoreDelta))}</strong>
+          <strong>${history.comparable === false ? "INCOMPARABLE" : escape(formatDelta(history.scoreDelta))}</strong>
         </article>
         <article class="${(history.issueDelta ?? 0) <= 0 ? "positive" : "negative"}">
           <span>Issue Change</span>
-          <strong>${escape(formatDelta(history.issueDelta, true))}</strong>
+          <strong>${history.comparable === false ? "UNKNOWN" : escape(formatDelta(history.issueDelta, true))}</strong>
         </article>
       </div>
       <div class="baseline-table">
@@ -695,7 +720,7 @@ function renderHistory(report: AuditReport): string {
             (run) => `
               <div>
                 <strong>${escape(formatDate(run.generatedAt))}</strong>
-                <span>Score ${escape(`${run.overallScore}/100`)}</span>
+                <span>Score ${escape(`${run.overallScore}/100`)}${run.comparable === true ? "" : " (PROVISIONAL / unverified scope)"}</span>
                 <span>Issues ${escape(run.totalIssues)}</span>
                 <span>Fail ${escape(run.counts.fail + run.counts.error)} · Warning ${escape(run.counts.warning)}</span>
               </div>
@@ -806,6 +831,8 @@ function renderCheckCard(result: CheckResult): string {
         <div><span>Duration</span><strong>${escape(formatDuration(result.duration))}</strong></div>
       </div>
       ${renderProgress(typeof result.score === "number" ? result.score : undefined)}
+      ${result.pageSummary ? `<p>Routes: ${result.pageSummary.completed}/${result.pageSummary.eligible} completed; ${result.pageSummary.timedOut} timed out; ${result.pageSummary.blocked} blocked; ${result.pageSummary.unverified} untested. Coverage: ${result.pageSummary.eligible ? Math.round(result.pageSummary.completed / result.pageSummary.eligible * 100) : 0}%.</p>` : ""}
+      ${typeof result.metadata?.preparationDurationMs === "number" ? `<p>Runtime preparation: ${escape(formatDuration(result.metadata.preparationDurationMs))}; scanner execution: ${escape(formatDuration(result.duration))}.</p>` : ""}
       <div class="summary-block">
         <strong>${summaryTitle}</strong>
         <p>${escape(result.message ?? "No summary provided.")}</p>
@@ -813,6 +840,8 @@ function renderCheckCard(result: CheckResult): string {
       <details>
         <summary><span>Expand details</span><span aria-hidden="true">⌄</span></summary>
         ${renderIssueViewer(result)}
+        ${Array.isArray(result.metadata?.toolingDiagnostics) && result.metadata.toolingDiagnostics.length ? `<h3>Tooling diagnostics</h3><pre>${escape(JSON.stringify(result.metadata.toolingDiagnostics, null, 2))}</pre>` : ""}
+        ${Array.isArray(result.metadata?.unverifiedSourceCandidates) && result.metadata.unverifiedSourceCandidates.length ? `<h3>Unverified source references</h3><p>These references are not confirmed broken images in the audited runtime.</p><pre>${escape(JSON.stringify(result.metadata.unverifiedSourceCandidates, null, 2))}</pre>` : ""}
       </details>
     </article>
   `;
@@ -1123,7 +1152,7 @@ function renderStyles(): string {
         height: 172px;
         place-items: center;
         border-radius: 50%;
-        background: radial-gradient(circle at center, var(--surface) 0 58%, transparent 59%), conic-gradient(var(--success) calc(var(--score) * 1%), rgba(148, 163, 184, .18) 0);
+        background: radial-gradient(circle at center, var(--surface) 0 58%, transparent 59%), conic-gradient(var(--score-color, var(--success)) calc(var(--score) * 1%), rgba(148, 163, 184, .18) 0);
       }
       .score-orbit strong { font-size: 3.6rem; line-height: 1; }
       .score-orbit span, .score-orbit small { color: var(--text-muted); font-weight: 800; }

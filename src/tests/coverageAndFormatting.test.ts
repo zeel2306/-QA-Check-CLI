@@ -43,6 +43,26 @@ test("15 & 16. Coverage denominator excludes NOT_APPLICABLE scanners but include
   assert.equal(cov.coveragePercent, 91, "10 / 11 = 91%");
 });
 
+test("PASS, WARNING, FAIL count as executed; SKIPPED and ERROR reduce coverage; NOT_APPLICABLE is excluded", () => {
+  const results: CheckResult[] = [
+    { name: "SEO", status: "PASS", duration: 10 },
+    { name: "Responsive", status: "FAIL", duration: 10 },
+    { name: "Accessibility", status: "WARNING", duration: 10 },
+    { name: "Lighthouse", status: "SKIPPED", duration: 0 },
+    { name: "BrokenLinks", status: "ERROR", duration: 10 },
+    { name: "CodeQuality", status: "NOT_APPLICABLE", duration: 0 },
+  ];
+
+  const coverage = calculateScanCoverage(results);
+
+  assert.equal(coverage.notApplicable, 1, "NOT_APPLICABLE count should be 1");
+  assert.equal(coverage.applicableScanners, 5, "Applicable scanners should be 5 (excluding NOT_APPLICABLE)");
+  assert.equal(coverage.executedSuccessfully, 3, "PASS, WARNING, FAIL count as executedSuccessfully (3)");
+  assert.equal(coverage.skipped, 1, "SKIPPED count should be 1");
+  assert.equal(coverage.errors, 1, "ERROR count should be 1");
+  assert.equal(coverage.coveragePercent, 60, "Coverage percent should be 3/5 = 60%");
+});
+
 test("17 & 18. HTML report strips ANSI codes and SKIPPED report card does NOT say 'No issues detected'", async () => {
   const report: AuditReport = {
     version: 2,

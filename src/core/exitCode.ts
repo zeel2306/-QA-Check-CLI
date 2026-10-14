@@ -14,7 +14,7 @@ export function getExitCode(
   }
 
   const hasFail = report.results.some(
-    (result) => result.status === "FAIL" || result.status === "ERROR",
+    (result) => ["FAIL", "ERROR", "PARTIAL", "TIMEOUT", "BLOCKED"].includes(result.status),
   );
 
   const hasWarning = report.results.some(

@@ -1,4 +1,5 @@
 import test from "node:test";
+import http from "node:http";
 import assert from "node:assert/strict";
 import { crawlExpressRoutes } from "../crawler.js";
 import { ExpressPipeline } from "../pipeline/express.pipeline.js";
@@ -75,19 +76,23 @@ test("NOT_APPLICABLE checks are excluded from scan coverage and score denominato
 });
 
 test("ApiTestingCheck correctly evaluates test case pass and fail status", async () => {
+  const server = http.createServer((_, response) => { response.setHeader("Content-Type", "application/json"); response.end(JSON.stringify({id:1,title:"Local deterministic case"})); });
+  await new Promise<void>(resolve => server.listen(0,"127.0.0.1",resolve));
   const cases: ApiTestCase[] = [
     {
       name: "mock success",
       method: "GET",
-      url: "https://jsonplaceholder.typicode.com/todos/1",
+      url: `http://127.0.0.1:${(server.address() as any).port}/todos/1`,
       expect: { status: 200, requiredFields: ["id", "title"] },
     },
   ];
 
   const check = new ApiTestingCheck(cases);
+  try {
   const result = await check.run("/mock");
   assert.equal(result.name, "API Testing");
   assert.equal(result.status, "PASS");
   assert.equal(result.data?.total, 1);
   assert.equal(result.data?.passed, 1);
+  } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(()=>resolve())); }
 });

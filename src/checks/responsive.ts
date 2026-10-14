@@ -1,3 +1,4 @@
+import { SOURCE_GLOB_IGNORE } from "../utils/sourcePolicy.js";
 import fsp from "fs/promises";
 import path from "path";
 import fg from "fast-glob";
@@ -21,7 +22,7 @@ export class ResponsiveCheck extends BrowserCheck {
     try {
       htmlFiles = await fg(["**/*.html"], {
         cwd: projectPath,
-        ignore: ["**/node_modules/**", "**/reports/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/.git/**"],
+        ignore: [...SOURCE_GLOB_IGNORE, "**/storage/**"],
       });
 
       for (const relHtmlPath of htmlFiles) {

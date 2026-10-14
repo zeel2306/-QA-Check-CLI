@@ -2,8 +2,10 @@ import fs from "fs/promises";
 import path from "path";
 import { chromium, type Browser, type Page } from "playwright";
 import axe from "axe-core";
-import type { BrowserIssue } from "../types/result.js";
+import { inspectFormLabels } from "./formLabels.js";
+import type { BrowserIssue, PageAuditSummary, PerRouteTargetAudit } from "../types/result.js";
 import type { AuthSession } from "./auth.js";
+import { runtimeSettings, navigateReady, type RuntimeSettings } from "./readiness.js";
 
 export const VIEWPORTS = {
   Desktop: { width: 1920, height: 1080 },
@@ -59,10 +61,23 @@ export interface BrowserAudit {
   screenshots: string[];
   skippedRoutes: string[];
   imageResponses: Record<string, number>;
+  pageSummary: PageAuditSummary;
+  routeAudits: PerRouteTargetAudit[];
 }
 
-async function navigate(page: Page, url: string): Promise<void> {
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
+export function routeBatches(routes: string[], concurrency: number): string[][] {
+  const unique = [...new Set(routes)];
+  const limit = Math.max(1, Math.min(8, Math.floor(concurrency)));
+  return Array.from({ length: Math.ceil(unique.length / limit) }, (_, index) => unique.slice(index * limit, (index + 1) * limit));
+}
+
+async function navigate(page: Page, url: string, settings: RuntimeSettings, initial: boolean, signal?: AbortSignal): Promise<void> {
+  const status = await navigateReady(page, url, settings, initial, signal);
+  // File discovery may describe a page served by an extensionless Node router.
+  if (status === 404 && new URL(url).pathname.endsWith(".html")) {
+    const alternate = new URL(url); alternate.pathname = alternate.pathname.slice(0, -5);
+    await navigateReady(page, alternate.href, settings, initial, signal);
+  }
   // Wait for asynchronous fetch/XHR network requests triggered during React hydration/useEffect
   await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => undefined);
   await page.waitForTimeout(300);
@@ -84,17 +99,17 @@ async function installLayoutShiftObserver(page: Page): Promise<void> {
 }
 
 export function concreteRoutes(routes: string[]): string[] {
-  return routes
+  return [...new Set(routes
     .map((route) => route.replace(/^[A-Z]+\s+/, ""))
     .filter(
       (route) =>
-        !/[\[\]:*]/.test(route) &&
+        !/[\[\]{}:*]/.test(route) &&
         !route.startsWith("/api/") &&
         !route.startsWith("api/") &&
         !route.startsWith("src/") &&
         !route.startsWith("/src/") &&
         !/\.(tsx?|jsx?)$/i.test(route)
-    );
+    ))];
 }
 
 function safeName(route: string): string {
@@ -243,6 +258,7 @@ async function inspectPage(
   page: Page,
   route: string,
   baseUrl: string,
+  formLabelPolicy?: "associated" | "visible",
 ): Promise<
   Omit<
     BrowserAudit,
@@ -251,6 +267,8 @@ async function inspectPage(
     | "screenshots"
     | "skippedRoutes"
     | "imageResponses"
+    | "pageSummary"
+    | "routeAudits"
   >
 > {
   const result = await page.evaluate((route) => {
@@ -307,14 +325,14 @@ async function inspectPage(
   );
   return {
     seo: [result.seo],
-    accessibility: axeResult.flatMap((violation) =>
+    accessibility: [...await inspectFormLabels(page, route, formLabelPolicy), ...axeResult.flatMap((violation) =>
       violation.nodes.map((node) => ({
         route,
         type: violation.id,
         message: violation.help,
         selector: node.target.join(" "),
       })),
-    ),
+    )],
     links: result.links.map((url) => ({
       route,
       url,
@@ -328,6 +346,7 @@ async function inspectPage(
 }
 
 function emptyAudit(baseUrl: string, routes: string[]): BrowserAudit {
+  const concrete = concreteRoutes(routes);
   return {
     baseUrl,
     seo: [],
@@ -340,9 +359,20 @@ function emptyAudit(baseUrl: string, routes: string[]): BrowserAudit {
     performance: [],
     screenshots: [],
     skippedRoutes: routes.filter(
-      (route) => !concreteRoutes(routes).includes(route),
+      (route) => !concrete.includes(route),
     ),
     imageResponses: {},
+    pageSummary: {
+      eligible: concrete.length,
+      attempted: 0,
+      completed: 0,
+      passed: 0,
+      failed: 0,
+      timedOut: 0,
+      blocked: 0,
+      unverified: routes.length - concrete.length,
+    },
+    routeAudits: [],
   };
 }
 
@@ -352,222 +382,305 @@ export async function runBrowserAudit(
   routes: string[],
   reportDir: string,
   authSession?: AuthSession,
+  settings: RuntimeSettings = runtimeSettings(),
+  signal?: AbortSignal,
+  formLabelPolicy?: "associated" | "visible",
 ): Promise<BrowserAudit> {
   const audit = emptyAudit(baseUrl, routes);
-
-  const browser: Browser = await chromium.launch({
-    headless: true,
-  });
+  if (!concreteRoutes(routes).length) return audit;
 
   const screenshotDir = path.join(reportDir, "screenshots");
 
   await fs.mkdir(screenshotDir, {
     recursive: true,
   });
+  const browser: Browser = await chromium.launch({
+    headless: true,
+    timeout: settings.browserLaunchTimeoutMs,
+  });
 
   const allRoutes = concreteRoutes(routes);
-
-  const CONCURRENCY = 2;
+  const CONCURRENCY = settings.browserConcurrency;
+  const PER_PAGE_TIMEOUT_MS = settings.routeTimeoutMs;
+  const deadline = Date.now() + settings.browserAuditTimeoutMs;
+  const cancel = () => { void browser.close().catch(() => undefined); };
+  signal?.addEventListener("abort", cancel, { once: true });
 
   try {
-    for (let i = 0; i < allRoutes.length; i += CONCURRENCY) {
-      const batch = allRoutes.slice(i, i + CONCURRENCY);
+    let i = 0;
+    for (const batch of routeBatches(allRoutes, CONCURRENCY)) {
+      if (signal?.aborted || Date.now() >= deadline) {
+        for (const route of allRoutes.slice(i)) {
+          audit.pageSummary.unverified++;
+          audit.routeAudits.push({ route, status: "SKIPPED", errorMessage: signal?.aborted ? "Scan cancelled" : "Browser audit budget exhausted" });
+        }
+        break;
+      }
 
       await Promise.all(
-        batch.map(async (route) => {
+        batch.map(async (route, batchIdx) => {
+          const routeIndex = i + batchIdx + 1;
+          audit.pageSummary.attempted++;
+          const routeStartTime = Date.now();
+          console.log(`[Browser Audit] (${routeIndex}/${allRoutes.length}) Auditing route: ${route}`);
+
           let context: Awaited<ReturnType<Browser["newContext"]>> | undefined;
           let responsiveContext:
             | Awaited<ReturnType<Browser["newContext"]>>
             | undefined;
 
+          let isTimeout = false;
+          let closingContext = false;
+          let documentFailure: BrowserIssue | undefined;
+          let routeError: string | undefined;
+
           try {
-            context = await browser.newContext({
-              viewport: VIEWPORTS.Desktop,
-              extraHTTPHeaders: authSession?.headers,
-            });
+            const auditRoutePass = async () => {
+              context = await browser.newContext({
+                viewport: VIEWPORTS.Desktop,
+                extraHTTPHeaders: authSession?.headers,
+              });
 
-            if (authSession?.cookies && authSession.cookies.length > 0) {
-              await context.addCookies(authSession.cookies);
-            }
+              if (authSession?.cookies && authSession.cookies.length > 0) {
+                await context.addCookies(authSession.cookies);
+              }
 
-            const page = await context.newPage();
+              const page = await context.newPage();
 
-            await installLayoutShiftObserver(page);
+              await installLayoutShiftObserver(page);
 
-            page.on("console", (message) => {
-              if (message.type() === "error") {
-                const text = message.text();
-                let type = "console-error";
-                if (text.includes("Failed to load resource") || text.includes("404")) {
-                  type = "resource-load-error";
-                } else if (text.includes("Warning:") || text.includes("React will")) {
-                  type = "framework-warning";
+              page.on("console", (message) => {
+                if (message.type() === "error") {
+                  const text = message.text();
+                  let type = "console-error";
+                  if (text.includes("Failed to load resource") || text.includes("404")) {
+                    type = "resource-load-error";
+                  } else if (text.includes("Warning:") || text.includes("React will")) {
+                    type = "framework-warning";
+                  }
+                  audit.console.push({
+                    route,
+                    type,
+                    message: text,
+                  });
+                }
+              });
+
+              page.on("pageerror", (error) => {
+                let type = "javascript-exception";
+                if (error.message.includes("Unhandled Promise Rejection") || error.name === "UnhandledRejection") {
+                  type = "unhandled-rejection";
                 }
                 audit.console.push({
                   route,
                   type,
-                  message: text,
+                  message: error.message,
                 });
-              }
-            });
-
-            page.on("pageerror", (error) => {
-              let type = "javascript-exception";
-              if (error.message.includes("Unhandled Promise Rejection") || error.name === "UnhandledRejection") {
-                type = "unhandled-rejection";
-              }
-              audit.console.push({
-                route,
-                type,
-                message: error.message,
               });
-            });
 
-            page.on("requestfailed", (request) => {
-              if (shouldIgnore(request.url())) {
-                return;
-              }
+              page.on("requestfailed", (request) => {
+                if (isTimeout || closingContext || signal?.aborted) return;
+                if (shouldIgnore(request.url())) {
+                  return;
+                }
 
-              const failureReason = request.failure()?.errorText ?? "Request failed";
-              audit.network.push({
-                route,
-                type: "failed-request",
-                message: `${request.method()} ${request.url()} - ${failureReason}`,
-                url: request.url(),
-                method: request.method(),
-                resourceType: request.resourceType(),
-                reason: failureReason,
-              });
-            });
-
-            page.on("requestfinished", (request) => {
-              if (shouldIgnore(request.url())) {
-                return;
-              }
-
-              const timing = request.timing();
-
-              if (timing.responseEnd > 2000) {
+                const failureReason = request.failure()?.errorText ?? "Request failed";
+                if (/ERR_ABORTED/.test(failureReason)) return; // Cancellation is not a confirmed network defect.
                 audit.network.push({
                   route,
-                  type: "slow-request",
-                  message: `${Math.round(timing.responseEnd)}ms response`,
+                  type: "failed-request",
+                  message: `${request.method()} ${request.url()} - ${failureReason}`,
                   url: request.url(),
                   method: request.method(),
                   resourceType: request.resourceType(),
+                  reason: failureReason,
                 });
-              }
-            });
+              });
 
-            page.on("response", (response) => {
-              const url = response.url();
-              const req = response.request();
-              if (req.resourceType() === "image") {
-                audit.imageResponses[url] = response.status();
-              }
+              page.on("requestfinished", (request) => {
+                if (shouldIgnore(request.url())) {
+                  return;
+                }
 
-              if (shouldIgnore(url)) {
-                return;
-              }
+                const timing = request.timing();
 
-              const status = response.status();
-              const contentType = response.headers()["content-type"] || "";
-              const isApiRoute = url.includes("/api/") || req.resourceType() === "fetch" || req.resourceType() === "xhr";
+                if (timing.responseEnd > 2000) {
+                  audit.network.push({
+                    route,
+                    type: "slow-request",
+                    message: `${Math.round(timing.responseEnd)}ms response`,
+                    url: request.url(),
+                    method: request.method(),
+                    resourceType: request.resourceType(),
+                  });
+                }
+              });
 
-              if (status >= 400) {
-                audit.network.push({
+              page.on("response", (response) => {
+                const url = response.url();
+                const req = response.request();
+                if (req.resourceType() === "image") {
+                  audit.imageResponses[url] = response.status();
+                }
+
+                if (shouldIgnore(url)) {
+                  return;
+                }
+
+                const status = response.status();
+                const contentType = response.headers()["content-type"] || "";
+                const isApiRoute = url.includes("/api/") || req.resourceType() === "fetch" || req.resourceType() === "xhr";
+                if (req.resourceType() === "document") {
+                  documentFailure = status >= 400 ? { route, type: `http-${status}`, message: `HTTP ${status} ${response.statusText()}`.trim(), url, method: req.method(), status, resourceType: "document" } : undefined;
+                  // Retry/compilation responses are infrastructure evidence. Only the
+                  // final successfully navigated document can confirm a page defect.
+                  if (status >= 400) return;
+                }
+
+                if (status >= 400) {
+                  audit.network.push({
+                    route,
+                    type: `http-${status}`,
+                    message: `HTTP ${status} ${response.statusText()}`.trim(),
+                    url,
+                    method: req.method(),
+                    status,
+                    statusText: response.statusText(),
+                    resourceType: req.resourceType(),
+                  });
+                } else if (status === 200 && isApiRoute && url.includes("/api/") && contentType.includes("text/html")) {
+                  audit.network.push({
+                    route,
+                    type: "http-404",
+                    message: `API endpoint returned HTML page (SPA fallback 404)`,
+                    url,
+                    method: req.method(),
+                    status: 404,
+                    statusText: "Not Found (SPA Fallback)",
+                    resourceType: req.resourceType(),
+                  });
+                }
+              });
+
+              await navigate(page, new URL(route, baseUrl).href, settings, true, signal);
+              if (documentFailure) audit.network.push(documentFailure);
+
+              const data = await inspectPage(page, route, baseUrl, formLabelPolicy);
+
+              audit.seo.push(...data.seo);
+              audit.accessibility.push(...data.accessibility);
+              audit.links.push(...data.links);
+              audit.images.push(...data.images);
+              audit.performance.push(...data.performance);
+
+              closingContext = true;
+              await context.close();
+              context = undefined;
+
+              responsiveContext = await browser.newContext({ extraHTTPHeaders: authSession?.headers });
+              if (authSession?.cookies?.length) await responsiveContext.addCookies(authSession.cookies);
+
+              const responsivePage = await responsiveContext.newPage();
+
+              await installLayoutShiftObserver(responsivePage);
+
+              for (const [name, viewport] of Object.entries(VIEWPORTS)) {
+                await responsivePage.setViewportSize(viewport);
+
+                await navigate(responsivePage, new URL(route, baseUrl).href, settings, false, signal);
+
+                const issues = await inspectResponsive(
+                  responsivePage,
                   route,
-                  type: `http-${status}`,
-                  message: `HTTP ${status} ${response.statusText()}`.trim(),
-                  url,
-                  method: req.method(),
-                  status,
-                  statusText: response.statusText(),
-                  resourceType: req.resourceType(),
-                });
-              } else if (status === 200 && isApiRoute && url.includes("/api/") && contentType.includes("text/html")) {
-                audit.network.push({
-                  route,
-                  type: "http-404",
-                  message: `API endpoint returned HTML page (SPA fallback 404)`,
-                  url,
-                  method: req.method(),
-                  status: 404,
-                  statusText: "Not Found (SPA Fallback)",
-                  resourceType: req.resourceType(),
-                });
-              }
-            });
-
-            await navigate(page, new URL(route, baseUrl).href);
-
-            const data = await inspectPage(page, route, baseUrl);
-
-            audit.seo.push(...data.seo);
-            audit.accessibility.push(...data.accessibility);
-            audit.links.push(...data.links);
-            audit.images.push(...data.images);
-            audit.performance.push(...data.performance);
-
-            await context.close();
-            context = undefined;
-
-            responsiveContext = await browser.newContext();
-
-            const responsivePage = await responsiveContext.newPage();
-
-            await installLayoutShiftObserver(responsivePage);
-
-            for (const [name, viewport] of Object.entries(VIEWPORTS)) {
-              await responsivePage.setViewportSize(viewport);
-
-              await navigate(responsivePage, new URL(route, baseUrl).href);
-
-              const issues = await inspectResponsive(
-                responsivePage,
-                route,
-                name,
-              );
-
-              audit.responsive.push(...issues);
-
-              if (issues.length > 0) {
-                const screenshot = path.join(
-                  screenshotDir,
-                  `${safeName(route)}-${name.toLowerCase()}.png`,
+                  name,
                 );
 
-                await responsivePage.screenshot({
-                  path: screenshot,
-                  fullPage: true,
-                });
+                audit.responsive.push(...issues);
 
-                audit.screenshots.push(screenshot);
+                if (issues.length > 0) {
+                  const screenshot = path.join(
+                    screenshotDir,
+                    `${safeName(route)}-${name.toLowerCase()}.png`,
+                  );
+
+                  await responsivePage.screenshot({
+                    path: screenshot,
+                    fullPage: true,
+                  });
+
+                  audit.screenshots.push(screenshot);
+                }
               }
+
+              await responsiveContext.close();
+              responsiveContext = undefined;
+            };
+
+            // Bounded per-page timeout race
+            let timeoutId: NodeJS.Timeout | undefined;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              timeoutId = setTimeout(() => {
+                isTimeout = true;
+                reject(new Error(`Navigation/inspection timeout after ${PER_PAGE_TIMEOUT_MS / 1000}s`));
+              }, Math.max(1, Math.min(PER_PAGE_TIMEOUT_MS, deadline - Date.now())));
+            });
+
+            try {
+              await Promise.race([auditRoutePass(), timeoutPromise]);
+            } finally {
+              if (timeoutId) clearTimeout(timeoutId);
             }
 
-            await responsiveContext.close();
-            responsiveContext = undefined;
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            audit.skippedRoutes.push(`${route}: ${message}`);
-            audit.network.push({
+            const durationMs = Date.now() - routeStartTime;
+            audit.pageSummary.completed++;
+            audit.pageSummary.passed++;
+            audit.routeAudits.push({
               route,
-              type: "route-audit-skipped",
-              message,
-              url: new URL(route, baseUrl).href,
+              status: "PASSED",
+              durationMs,
             });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            routeError = message;
+            const durationMs = Date.now() - routeStartTime;
+
+            if (signal?.aborted || /blocked by authentication/i.test(message)) {
+              audit.pageSummary.blocked++;
+              audit.routeAudits.push({ route, status: "BLOCKED", durationMs, errorMessage: signal?.aborted ? "Scan cancelled" : message });
+            } else if (isTimeout || /timeout|timed out/i.test(message)) {
+              console.warn(`[Browser Audit] Route ${route} timed out after ${PER_PAGE_TIMEOUT_MS / 1000}s - preserving completed findings and continuing`);
+              audit.pageSummary.timedOut++;
+              audit.routeAudits.push({
+                route,
+                status: "TIMED_OUT",
+                durationMs,
+                errorMessage: message,
+              });
+            } else {
+              console.warn(`[Browser Audit] Route ${route} audit failed: ${message}`);
+              audit.pageSummary.failed++;
+              audit.routeAudits.push({
+                route,
+                status: "FAILED",
+                durationMs,
+                errorMessage: message,
+              });
+            }
+
+            audit.skippedRoutes.push(`${route}: ${message}`);
           } finally {
+            closingContext = true;
             await context?.close().catch(() => undefined);
             await responsiveContext?.close().catch(() => undefined);
           }
         }),
       );
+      i += batch.length;
     }
 
     return audit;
   } finally {
+    signal?.removeEventListener("abort", cancel);
     await browser.close();
   }
 }

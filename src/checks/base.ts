@@ -12,7 +12,7 @@ export abstract class BrowserCheck<T = unknown> implements Check<T> {
     try {
       return { name: this.name, ...await this.evaluate(await this.audit()), duration: performance.now() - started };
     } catch (error) {
-      return { name: this.name, status: "SKIPPED", message: error instanceof Error ? error.message : String(error), duration: performance.now() - started };
+      return { name: this.name, status: "BLOCKED", score: null, message: error instanceof Error ? error.message : String(error), duration: performance.now() - started };
     }
   }
 }

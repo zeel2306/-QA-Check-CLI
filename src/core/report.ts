@@ -16,59 +16,91 @@ function resultScore(result: CheckResult): number {
 export function calculateScanCoverage(results: CheckResult[]): ScanCoverage {
   const notApplicable = results.filter((r) => r.status === "NOT_APPLICABLE").length;
   const applicable = results.filter((r) => r.status !== "NOT_APPLICABLE");
-  const executedSuccessfully = results.filter((r) => r.status === "PASS" || r.status === "FAIL" || r.status === "WARNING");
-  const skipped = results.filter((r) => r.status === "SKIPPED");
-  const errors = results.filter((r) => r.status === "ERROR");
+  const executedSuccessfully = results.filter((r) => r.status === "PASS" || r.status === "FAIL" || r.status === "WARNING" || r.status === "PARTIAL");
+  const skipped = results.filter((r) => r.status === "SKIPPED").length;
+  const errors = results.filter((r) => r.status === "ERROR").length;
+  const partial = results.filter((r) => r.status === "PARTIAL").length;
+  const timedOut = results.filter((r) => r.status === "TIMEOUT").length;
+  const blocked = results.filter((r) => r.status === "BLOCKED").length;
 
   const coveragePercent = applicable.length > 0 ? Math.round((executedSuccessfully.length / applicable.length) * 100) : 0;
 
   return {
     applicableScanners: applicable.length,
     executedSuccessfully: executedSuccessfully.length,
-    skipped: skipped.length,
-    errors: errors.length,
+    skipped,
+    errors,
     notApplicable,
+    partial,
+    timedOut,
+    blocked,
     coveragePercent,
   };
+}
+
+export function assessScoreEvidence(results: CheckResult[], score: number): NonNullable<AuditReport["scoreEvidence"]> {
+  const applicable = results.filter(result => result.status !== "NOT_APPLICABLE");
+  const completed = applicable.filter(result => ["PASS", "FAIL", "WARNING", "PARTIAL"].includes(result.status));
+  const missingScanners = applicable.filter(result => !["PASS", "FAIL", "WARNING"].includes(result.status) || result.metadata?.incompleteScope).map(result => result.name);
+  const status = !completed.length ? "INSUFFICIENT_EVIDENCE" : missingScanners.length ? "PROVISIONAL" : "COMPLETE";
+  return { status, observedScore: completed.length ? score : null, missingScanners,
+    warning: status === "COMPLETE" ? undefined : "INCOMPLETE AUDIT: score reflects available scanner evidence only. Unexecuted checks and routes are unknown; their defects have not been ruled out." };
 }
 
 export function evaluateCurrentQualityGate(
   results: CheckResult[],
   overallScore: number,
-  options: { failOn?: "warning" | "error" | "none"; minScore?: number } = {}
+  options: { failOn?: "warning" | "error" | "none"; minScore?: number; profile?: string; runtime?: { minimumRouteCoveragePercent?: number } } = {}
 ): CurrentQualityGate {
   const failOn = options.failOn ?? "error";
   const minScore = options.minScore ?? 0;
+  const isFastProfile = options.profile === "fast";
   const failingChecks: string[] = [];
   const warningChecks: string[] = [];
   const skippedChecks: string[] = [];
+  const unexpectedSkips: string[] = [];
   const erroredChecks: string[] = [];
   const reasons: string[] = [];
 
   for (const r of results) {
-    if (r.status === "FAIL" || r.status === "ERROR") {
+    if (r.status === "FAIL" || r.status === "ERROR" || r.status === "TIMEOUT" || r.status === "BLOCKED") {
       failingChecks.push(r.name);
-      if (r.status === "ERROR") erroredChecks.push(r.name);
-      reasons.push(`${r.name} failed`);
-    } else if (r.status === "WARNING") {
+      if (r.status === "ERROR" || r.status === "TIMEOUT" || r.status === "BLOCKED") erroredChecks.push(r.name);
+      reasons.push(`${r.name} ${r.status.toLowerCase()}`);
+    } else if (r.status === "WARNING" || r.status === "PARTIAL") {
       warningChecks.push(r.name);
       if (failOn === "warning") {
-        reasons.push(`${r.name} warning`);
+        reasons.push(`${r.name} ${r.status.toLowerCase()}`);
       }
     } else if (r.status === "SKIPPED") {
       skippedChecks.push(r.name);
+      const isFastSkip = isFastProfile || (r.skipReason && r.skipReason.toLowerCase().includes("fast profile"));
+      if (!isFastSkip) {
+        unexpectedSkips.push(r.name);
+      }
     }
   }
 
   if (minScore > 0 && overallScore < minScore) {
     reasons.push(`Overall score ${overallScore} is below minimum required score ${minScore}`);
   }
+  const minimumRouteCoverage = options.runtime?.minimumRouteCoveragePercent ?? 0;
+  if (minimumRouteCoverage > 0) for (const result of results) {
+    const eligible = result.pageSummary?.eligible ?? result.pagesDiscovered ?? 0;
+    const completed = result.pageSummary?.completed ?? result.pagesCompleted ?? 0;
+    if (eligible && completed / eligible * 100 < minimumRouteCoverage) reasons.push(`${result.name} route coverage ${Math.round(completed / eligible * 100)}% is below required ${minimumRouteCoverage}%`);
+  }
 
   const coverage = calculateScanCoverage(results);
-  const confidence: "FULL" | "PARTIAL" = coverage.coveragePercent >= 100 ? "FULL" : "PARTIAL";
+  const confidence: "FULL" | "PARTIAL" | "FAST_PROFILE" = isFastProfile
+    ? "FAST_PROFILE"
+    : coverage.coveragePercent >= 100 && coverage.partial === 0 && !results.some(result => result.metadata?.incompleteScope)
+    ? "FULL"
+    : "PARTIAL";
   const confidencePercent = coverage.coveragePercent;
 
   const hasFailures =
+    reasons.some(reason => reason.includes("route coverage")) ||
     failingChecks.length > 0 ||
     (failOn === "warning" && warningChecks.length > 0) ||
     (minScore > 0 && overallScore < minScore);
@@ -79,12 +111,13 @@ export function evaluateCurrentQualityGate(
   if (hasFailures) {
     status = "FAILED";
     passed = false;
-  } else if (skippedChecks.length > 0 || erroredChecks.length > 0) {
+  } else if (unexpectedSkips.length > 0 || erroredChecks.length > 0 || results.some(result => result.status === "PARTIAL" || result.metadata?.incompleteScope)) {
     status = "INCOMPLETE";
     passed = false;
-    const count = skippedChecks.length + erroredChecks.length;
-    const names = [...skippedChecks, ...erroredChecks].join(", ");
-    reasons.push(`Scan is incomplete: ${count} check(s) skipped/errored (${names})`);
+    const partialChecks = results.filter(result => result.status === "PARTIAL" || result.metadata?.incompleteScope).map(result => result.name);
+    const count = unexpectedSkips.length + erroredChecks.length + partialChecks.length;
+    const names = [...unexpectedSkips, ...erroredChecks, ...partialChecks].join(", ");
+    reasons.push(`Scan is incomplete: ${count} check(s) skipped/errored/incomplete (${names})`);
   } else {
     status = "PASSED";
     passed = true;
@@ -104,7 +137,7 @@ export function evaluateCurrentQualityGate(
 }
 
 export function calculateOverallScore(results: CheckResult[]): number {
-  const scored = results.filter((result) => result.status === "PASS" || result.status === "FAIL" || result.status === "WARNING");
+  const scored = results.filter((result) => result.status === "PASS" || result.status === "FAIL" || result.status === "WARNING" || (result.status === "PARTIAL" && typeof result.score === "number"));
 
   if (!scored.length) return 0;
 

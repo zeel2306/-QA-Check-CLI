@@ -154,6 +154,12 @@ export function normalizeCheckResultIssues(result: CheckResult): QAIssue[] {
   if (result.issues?.length) return result.issues;
   if (result.status === "PASS") return [];
 
+  if (result.name === "Lighthouse Performance" && Array.isArray(result.metadata?.routeDiagnostics)) {
+    // Per-page score records are measurements, not defects on completed pages.
+    const failures = result.metadata.routeDiagnostics.filter((route: any) => route.status !== "SUCCESS");
+    return failures.map((route: any, index: number) => issueFromItem(result, { type: route.status === "TIMED_OUT" ? "lighthouse-route-timeout" : "lighthouse-route-failed", route: route.route, message: route.error ?? "Lighthouse route did not complete", ...route }, index));
+  }
+
   const issues = legacyIssueItems(result).map((item, index) =>
     issueFromItem(result, item, index),
   );

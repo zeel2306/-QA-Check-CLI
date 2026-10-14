@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import type { QaEngineOptions } from "./engine.js";
 import { isQaProfile } from "./profile.js";
+import { runtimeSettings } from "./readiness.js";
+import { lighthouseRouteTimeout } from "./lighthouseSettings.js";
 
 function normalizeConfig(value: unknown): Partial<QaEngineOptions> {
   if (!value || typeof value !== "object") {
@@ -10,6 +12,16 @@ function normalizeConfig(value: unknown): Partial<QaEngineOptions> {
 
   const source = value as Record<string, unknown>;
   const config: Partial<QaEngineOptions> = {};
+  if (typeof source.url === "string") config.url = source.url;
+  if (typeof source.baseUrl === "string") config.baseUrl = source.baseUrl;
+  if (source.runtime && typeof source.runtime === "object") {
+    // Validate bounds before starting any project process.
+    runtimeSettings(source.runtime as Partial<import("./readiness.js").RuntimeSettings>, source.ci === true);
+    config.runtime = source.runtime as Partial<import("./readiness.js").RuntimeSettings>;
+  }
+  if (typeof source.lighthouseBudgetMs === "number" && source.lighthouseBudgetMs > 0 && source.lighthouseBudgetMs <= 600_000) config.lighthouseBudgetMs = source.lighthouseBudgetMs;
+  if (source.lighthouseRouteTimeoutMs !== undefined) config.lighthouseRouteTimeoutMs = lighthouseRouteTimeout(source.lighthouseRouteTimeoutMs);
+  if (source.formLabelPolicy === "associated" || source.formLabelPolicy === "visible") config.formLabelPolicy = source.formLabelPolicy;
 
   if (isQaProfile(source.profile)) config.profile = source.profile;
   if (typeof source.ci === "boolean") config.ci = source.ci;
@@ -63,7 +75,7 @@ function normalizeConfig(value: unknown): Partial<QaEngineOptions> {
     config.historyLimit = source.historyLimit;
   }
 
-  if (Array.isArray(source.api)) {
+  if (source.api && typeof source.api === "object") {
     config.apiTestCases = parseApiTestCases(source.api);
   }
 
@@ -147,18 +159,18 @@ export function parseApiTestCases(raw: unknown): import("../checks/api.js").ApiT
 export function loadConfig(
   projectPath: string,
 ): Partial<QaEngineOptions> {
-  const configFile = path.join(
-    projectPath,
-    "qa-check.config.json",
-  );
+  const parent = path.dirname(projectPath);
+  const configRoot = !fs.existsSync(path.join(projectPath, "qa-check.config.json")) && fs.existsSync(path.join(parent, "package.json")) && fs.existsSync(path.join(parent, "qa-check.config.json")) ? parent : projectPath;
+  const configFile = path.join(configRoot, "qa-check.config.json");
 
   let config: Partial<QaEngineOptions> = {};
 
   if (fs.existsSync(configFile)) {
     try {
       const raw = fs.readFileSync(configFile, "utf8");
-      config = normalizeConfig(JSON.parse(raw));
+      config = normalizeConfig(JSON.parse(raw.replace(/^\uFEFF/, "")));
     } catch (error) {
+      if (error instanceof Error && /^(runtime\.|lighthouseRouteTimeoutMs)/.test(error.message)) throw error;
       console.warn(
         "Failed to read qa-check.config.json",
         error,
@@ -177,11 +189,11 @@ export function loadConfig(
     ];
 
     for (const file of apiFiles) {
-      const apiPath = path.join(projectPath, file);
+      const apiPath = path.join(configRoot, file);
       if (fs.existsSync(apiPath)) {
         try {
           const raw = fs.readFileSync(apiPath, "utf8");
-          const cases = parseApiTestCases(JSON.parse(raw));
+          const cases = parseApiTestCases(JSON.parse(raw.replace(/^\uFEFF/, "")));
           if (cases.length > 0) {
             config.apiTestCases = cases;
             break;

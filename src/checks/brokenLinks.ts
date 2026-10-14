@@ -1,3 +1,4 @@
+import { SOURCE_GLOB_IGNORE } from "../utils/sourcePolicy.js";
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
@@ -8,17 +9,65 @@ import { deduplicateFindings, toCanonicalTargetHref } from "../core/canonical.js
 import { discoverDeclaredApplicationRoutes } from "../crawler.js";
 import { matchesAnyDeclaredRoute } from "../utils/routes.js";
 
-async function checkUrl(url: string): Promise<number> {
+export async function checkUrl(url: string, timeoutMs = 2500): Promise<number> {
   try {
     const response = await fetch(url, {
       method: "HEAD",
       redirect: "follow",
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
+    if (response.status === 404 || response.status === 405 || response.status === 501 || response.status === 403) {
+      const getResponse = await fetch(url, {
+        method: "GET",
+        headers: { Range: "bytes=0-1024" },
+        redirect: "follow",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return getResponse.status;
+    }
     return response.status;
   } catch {
-    return 0;
+    try {
+      const getResponse = await fetch(url, {
+        method: "GET",
+        headers: { Range: "bytes=0-1024" },
+        redirect: "follow",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return getResponse.status;
+    } catch {
+      return 0;
+    }
   }
+}
+
+function existsStaticTarget(projectPath: string, baseDir: string, cleanPath: string): boolean {
+  const candidates: string[] = [];
+  const normClean = cleanPath.startsWith("/") ? cleanPath : `/${cleanPath}`;
+
+  if (cleanPath.startsWith("/")) {
+    candidates.push(
+      path.join(projectPath, cleanPath),
+      path.join(projectPath, cleanPath + ".html"),
+      path.join(projectPath, cleanPath, "index.html"),
+      path.join(projectPath, "public", cleanPath),
+      path.join(projectPath, "public", cleanPath + ".html"),
+      path.join(projectPath, "public", cleanPath, "index.html")
+    );
+  } else {
+    candidates.push(
+      path.join(baseDir, cleanPath),
+      path.join(baseDir, cleanPath + ".html"),
+      path.join(baseDir, cleanPath, "index.html"),
+      path.join(projectPath, "public", cleanPath),
+      path.join(projectPath, "public", cleanPath + ".html"),
+      path.join(projectPath, "public", cleanPath, "index.html"),
+      path.join(projectPath, normClean),
+      path.join(projectPath, normClean + ".html"),
+      path.join(projectPath, normClean, "index.html")
+    );
+  }
+  return candidates.some((cand) => fs.existsSync(cand));
 }
 
 export interface BrokenLinkIssue {
@@ -35,28 +84,33 @@ export interface BrokenLinkIssue {
 
 export class BrokenLinksCheck extends BrowserCheck {
   readonly name = "Broken Links";
+  readonly timeoutMs = 180_000;
 
   async run(projectPath: string): Promise<CheckResult> {
     const started = performance.now();
+    const timings = { staticAnalysisMs: 0, linkVerificationMs: 0, totalMs: 0 };
     const staticBroken: BrokenLinkIssue[] = [];
     const staticWarnings: BrokenLinkIssue[] = [];
     const runtimeBroken: BrokenLinkIssue[] = [];
     const runtimeWarnings: BrokenLinkIssue[] = [];
 
     // 1. Static analysis of local HTML and JS/JSX/TS/TSX files
+    const staticStart = performance.now();
     let htmlFiles: string[] = [];
     let jsFiles: string[] = [];
     const declaredRoutes = new Set<string>(["/"]);
 
     try {
+      const globIgnore = [...SOURCE_GLOB_IGNORE, "**/storage/**"];
+
       htmlFiles = await fg(["**/*.html"], {
         cwd: projectPath,
-        ignore: ["**/node_modules/**", "**/reports/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/.git/**"],
+        ignore: globIgnore,
       });
 
       jsFiles = await fg(["src/**/*.{js,jsx,ts,tsx,vue}", "app/**/*.{js,jsx,ts,tsx,vue}"], {
         cwd: projectPath,
-        ignore: ["**/node_modules/**", "**/reports/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/.git/**"],
+        ignore: globIgnore,
       });
 
       for (const route of await discoverDeclaredApplicationRoutes(projectPath)) declaredRoutes.add(route);
@@ -110,16 +164,9 @@ export class BrokenLinksCheck extends BrowserCheck {
           const cleanPath = rawHref.split(/[?#]/)[0];
           if (!cleanPath) continue;
 
-          let targetFilePath: string;
-          if (cleanPath.startsWith("/")) {
-            targetFilePath = path.join(projectPath, cleanPath);
-          } else {
-            const htmlDir = path.dirname(fullHtmlPath);
-            targetFilePath = path.join(htmlDir, cleanPath);
-          }
-
+          const htmlDir = path.dirname(fullHtmlPath);
           const normRoute = cleanPath.startsWith("/") ? cleanPath : `/${cleanPath}`;
-          if (!fs.existsSync(targetFilePath) && !matchesAnyDeclaredRoute(normRoute, declaredRoutes)) {
+          if (!existsStaticTarget(projectPath, htmlDir, cleanPath) && !matchesAnyDeclaredRoute(normRoute, declaredRoutes)) {
             staticBroken.push({
               type: "broken-internal-link",
               file: relHtmlPath,
@@ -185,15 +232,9 @@ export class BrokenLinksCheck extends BrowserCheck {
           if (cleanPath.includes(":") || cleanPath.includes("*") || cleanPath.includes("[")) continue;
 
           const normRoute = cleanPath.startsWith("/") ? cleanPath : `/${cleanPath}`;
-          let targetFilePath: string;
-          if (cleanPath.startsWith("/")) {
-            targetFilePath = path.join(projectPath, cleanPath);
-          } else {
-            const jsDir = path.dirname(fullJsPath);
-            targetFilePath = path.join(jsDir, cleanPath);
-          }
+          const jsDir = path.dirname(fullJsPath);
 
-          if (!matchesAnyDeclaredRoute(normRoute, declaredRoutes) && !fs.existsSync(targetFilePath) && !fs.existsSync(targetFilePath + ".html")) {
+          if (!matchesAnyDeclaredRoute(normRoute, declaredRoutes) && !existsStaticTarget(projectPath, jsDir, cleanPath)) {
             staticBroken.push({
               type: "broken-internal-link",
               file: relJsPath,
@@ -207,18 +248,40 @@ export class BrokenLinksCheck extends BrowserCheck {
     } catch {
       // Ignore glob errors
     }
+    timings.staticAnalysisMs = Math.round(performance.now() - staticStart);
 
     // 2. Perform runtime URL check if browser audit is available
     let auditLinksCount = 0;
+    let verifiedCount = 0;
+    let isPartial = false;
+    let timedOutCount = 0;
+    let skippedCount = 0;
+    let runtimeStart = performance.now();
+    const LINK_VERIFICATION_BUDGET_MS = 45_000;
+
     try {
       const audit = await this.audit();
+      runtimeStart = performance.now();
+      if (audit?.pageSummary && audit.pageSummary.completed < audit.pageSummary.eligible) isPartial = true;
       if (audit && audit.links && audit.links.length > 0) {
-        auditLinksCount = audit.links.length;
         const unique = [...new Map(audit.links.filter((link) => /^https?:/i.test(link.url)).map((link) => [link.url, link])).values()];
-        const checked = await mapLimit(unique, 10, async (link) => ({ ...link, status: await checkUrl(link.url) }));
+        auditLinksCount = unique.length;
+
+        const checked = await mapLimit(unique, 8, async (link) => {
+          if (performance.now() - runtimeStart > LINK_VERIFICATION_BUDGET_MS) {
+            isPartial = true;
+            skippedCount++;
+            return { ...link, status: -1 };
+          }
+          const status = await checkUrl(link.url, 2500);
+          if (status > 0) verifiedCount++;
+          else { isPartial = true; timedOutCount++; }
+          return { ...link, status };
+        });
 
         for (const link of checked) {
-          if ((link.status === 0 || link.status >= 400) && !link.external) {
+          if (link.status <= 0) continue; // Unverified requests are infrastructure observations.
+          if (link.status >= 400 && !link.external) {
             runtimeBroken.push({
               type: "broken-internal-link",
               route: link.route,
@@ -239,6 +302,8 @@ export class BrokenLinksCheck extends BrowserCheck {
     } catch {
       // Browser audit unavailable
     }
+    timings.linkVerificationMs = Math.round(performance.now() - runtimeStart);
+    timings.totalMs = Math.round(performance.now() - started);
 
     if (htmlFiles.length === 0 && staticBroken.length === 0 && staticWarnings.length === 0 && auditLinksCount === 0 && runtimeBroken.length === 0) {
       return {
@@ -249,10 +314,11 @@ export class BrokenLinksCheck extends BrowserCheck {
         duration: Math.round(performance.now() - started),
         pagesAttempted: 0,
         pagesCompleted: 0,
+        data: { timings },
       };
     }
 
-    // Deduplicate static + runtime findings by defect signature (canonicalRoute + type + canonicalTargetHref)
+    // Deduplicate static + runtime findings by defect signature
     const getSignature = (item: BrokenLinkIssue, canonicalRoute: string) => {
       const canonicalTarget = toCanonicalTargetHref(item.url || item.target || "", canonicalRoute);
       return `${canonicalRoute}:${item.type}:${canonicalTarget}`;
@@ -261,14 +327,23 @@ export class BrokenLinksCheck extends BrowserCheck {
     const broken = deduplicateFindings(staticBroken, runtimeBroken, getSignature);
     const warnings = deduplicateFindings(staticWarnings, runtimeWarnings, getSignature);
 
-    const runtimePageCount = (await this.audit().catch(() => null))?.seo?.length || 0;
-    const pagesAttempted = runtimePageCount || htmlFiles.length || jsFiles.length || auditLinksCount;
-    const pagesCompleted = pagesAttempted;
+    const finalAudit = await this.audit().catch(() => null);
+    const runtimePageCount = finalAudit?.seo?.length || 0;
+    const pagesAttempted = finalAudit?.pageSummary?.eligible || runtimePageCount || htmlFiles.length || jsFiles.length || auditLinksCount;
+    const pagesCompleted = finalAudit?.pageSummary?.eligible ? finalAudit.pageSummary.completed : pagesAttempted;
 
-    const status = broken.length ? "FAIL" : warnings.length ? "WARNING" : "PASS";
+    const status = broken.length
+      ? "FAIL"
+      : isPartial
+      ? "PARTIAL"
+      : warnings.length
+      ? "WARNING"
+      : "PASS";
+
     const msgLines: string[] = [];
     if (broken.length) msgLines.push(`${broken.length} broken internal link(s)`);
     if (warnings.length) msgLines.push(`${warnings.length} link warning(s)`);
+    if (isPartial) msgLines.push(`verification incomplete (${verifiedCount}/${auditLinksCount} links verified; ${timedOutCount} timed out; ${skippedCount} skipped)`);
     if (msgLines.length === 0) msgLines.push("0 broken links");
 
     const message = `${pagesCompleted}/${pagesAttempted} pages audited — ${msgLines.join("; ")}`;
@@ -276,7 +351,7 @@ export class BrokenLinksCheck extends BrowserCheck {
     return {
       name: this.name,
       status,
-      score: broken.length ? Math.max(0, 100 - broken.length * 20) : 100,
+      score: broken.length ? Math.max(0, 100 - broken.length * 20) : isPartial ? 80 : 100,
       message,
       duration: Math.round(performance.now() - started),
       pagesAttempted,
@@ -284,6 +359,14 @@ export class BrokenLinksCheck extends BrowserCheck {
       data: {
         totalIssues: broken.length + warnings.length,
         issues: [...broken, ...warnings],
+        timings,
+        isPartial,
+        verifiedCount,
+        discoveredCount: auditLinksCount,
+        unverifiedCount: auditLinksCount - verifiedCount,
+        timedOutCount,
+        skippedCount,
+        confirmedBrokenCount: broken.length,
       },
     };
   }

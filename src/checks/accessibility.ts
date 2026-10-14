@@ -1,3 +1,4 @@
+import { SOURCE_GLOB_IGNORE } from "../utils/sourcePolicy.js";
 import fsp from "fs/promises";
 import path from "path";
 import fg from "fast-glob";
@@ -22,7 +23,7 @@ export class AccessibilityCheck extends BrowserCheck {
     try {
       htmlFiles = await fg(["**/*.html"], {
         cwd: projectPath,
-        ignore: ["**/node_modules/**", "**/reports/**", "**/dist/**", "**/build/**", "**/coverage/**", "**/.git/**"],
+        ignore: [...SOURCE_GLOB_IGNORE, "**/storage/**"],
       });
 
       for (const relHtmlPath of htmlFiles) {
@@ -69,16 +70,19 @@ export class AccessibilityCheck extends BrowserCheck {
 
           let hasMatchingLabel = false;
           if (hasId && hasId[1]) {
-            const idVal = hasId[1];
+            const idVal = hasId[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const labelRegex = new RegExp(`<label\\b[^>]*\\bfor\\s*=\\s*["']${idVal}["']`, "i");
             hasMatchingLabel = labelRegex.test(content);
           }
 
-          if (!hasAriaLabel && !hasMatchingLabel) {
+          const before = content.slice(0, match.index).toLowerCase();
+          const implicitlyLabeled = before.lastIndexOf("<label") > before.lastIndexOf("</label");
+          const fallbackName = /\b(?:placeholder|title)\s*=\s*["'][^"']+["']/i.test(attrs);
+          if (!hasAriaLabel && !hasMatchingLabel && !implicitlyLabeled && !fallbackName) {
             staticIssues.push({
               route: relHtmlPath,
               type: "label",
-              message: `Form element <${tag}${inputType !== "text" ? ` type="${inputType}"` : ""}> must have an accessible label`,
+              message: `Form element <${tag}${inputType !== "text" ? ` type="${inputType}"` : ""}> has no explicit label or naming attribute (static review; runtime axe resolves the accessible name)`,
               selector: `${tag}${hasId ? `#${hasId[1]}` : ""}`,
             });
           }

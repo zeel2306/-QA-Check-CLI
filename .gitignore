@@ -4,8 +4,12 @@ node_modules/
 # Build output
 dist/
 
-# QA reports
+# QA reports & test artifacts
 reports/
+test-reports/
+
+# Packaging tarballs
+*.tgz
 
 # Logs
 *.log
@@ -14,17 +18,20 @@ npm-debug.log*
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# VS Code
+# IDEs
 .vscode/
+.idea/
 
 # Coverage
 coverage/
 
-# Temporary files
+# Temporary & scratch files
+scratch/
 *.tmp
 *.temp

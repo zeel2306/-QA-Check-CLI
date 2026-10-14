@@ -23,6 +23,9 @@ export const DEFAULT_EXCLUDED_DIRECTORIES: readonly string[] = [
   "out",
   "coverage",
   "reports",
+  "history",
+  "qa-reports",
+  "artifacts",
   "tmp",
   "temp",
   "vendor",
@@ -48,10 +51,19 @@ export const SOURCE_GLOB_IGNORE: readonly string[] = [
   "**/out/**",
   "**/coverage/**",
   "**/reports/**",
+  "**/history/**",
+  "**/qa-reports/**",
+  "**/artifacts/**",
   "**/tmp/**",
   "**/temp/**",
   "**/vendor/**",
   "**/.git/**",
+  "**/report.html",
+  "**/report.json",
+  "**/report.md",
+  "**/report.pdf",
+  "**/report_full.json",
+  "**/*.report.html",
 ];
 
 export function isExcludedDir(dirName: string): boolean {
@@ -61,9 +73,9 @@ export function isExcludedDir(dirName: string): boolean {
 
 /**
  * Returns true if a file is legitimate project-owned application source code,
- * filtering out generated cache paths, node_modules, build outputs, and minified bundles.
+ * filtering out generated cache paths, node_modules, build outputs, generated reports, and minified bundles.
  */
-export function isProjectSourceFile(filePath: string, projectPath?: string): boolean {
+export function isProjectSourceFile(filePath: string, projectPath?: string, reportDir?: string): boolean {
   const relPath = projectPath ? path.relative(projectPath, filePath) : filePath;
   const normalized = relPath.replaceAll("\\", "/").toLowerCase();
   const segments = normalized.split("/");
@@ -74,8 +86,25 @@ export function isProjectSourceFile(filePath: string, projectPath?: string): boo
     }
   }
 
+  if (reportDir) {
+    const relReport = path.relative(reportDir, filePath).replaceAll("\\", "/");
+    if (!relReport.startsWith("..") && !path.isAbsolute(relReport)) {
+      return false;
+    }
+  }
+
   const baseName = segments.at(-1) || "";
-  if (baseName.endsWith(".min.js") || baseName.endsWith(".min.css") || baseName.endsWith(".bundle.js")) {
+  if (
+    baseName === "report.html" ||
+    baseName === "report.json" ||
+    baseName === "report.md" ||
+    baseName === "report.pdf" ||
+    baseName === "report_full.json" ||
+    baseName.endsWith(".report.html") ||
+    baseName.endsWith(".min.js") ||
+    baseName.endsWith(".min.css") ||
+    baseName.endsWith(".bundle.js")
+  ) {
     return false;
   }
 

@@ -29,7 +29,13 @@ export const logger = {
             ? "○"
             : result.status === "NOT_APPLICABLE"
               ? "—"
-              : "⚠";
+              : result.status === "TIMEOUT"
+                ? "⌛"
+                : result.status === "BLOCKED"
+                  ? "🚫"
+                  : result.status === "PARTIAL"
+                    ? "◐"
+                    : "⚠";
 
     const statusText = result.status === "NOT_APPLICABLE" ? "NOT APPLICABLE" : result.status;
     const scoreDisplay = typeof result.score === "number" ? ` (${result.score})` : "";
@@ -38,7 +44,7 @@ export const logger = {
     const color =
       result.status === "PASS"
         ? chalk.green
-        : result.status === "FAIL" || result.status === "ERROR"
+        : result.status === "FAIL" || result.status === "ERROR" || result.status === "TIMEOUT" || result.status === "BLOCKED"
           ? chalk.red
           : result.status === "SKIPPED" || result.status === "NOT_APPLICABLE"
             ? chalk.gray
@@ -65,8 +71,9 @@ export const logger = {
     console.log(chalk.cyan(line));
 
     console.log(
-      `${chalk.gray("Overall Score")} : ${scoreColor.bold(`${score}/100`)}`,
+      `${chalk.gray("Overall Score")} : ${scoreColor.bold(report?.scoreEvidence?.status === "INSUFFICIENT_EVIDENCE" ? "N/A — insufficient evidence" : `${score}/100${report?.scoreEvidence?.status === "PROVISIONAL" ? " (PROVISIONAL)" : ""}`)}`,
     );
+    if (report?.scoreEvidence?.warning) console.log(chalk.yellow(report.scoreEvidence.warning));
 
     if (report?.coverage) {
       console.log(

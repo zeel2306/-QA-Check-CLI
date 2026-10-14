@@ -5,7 +5,10 @@ import type { AuditReport, CheckResult } from "../types/result.js";
 function statusIcon(status: CheckResult["status"]): string {
   if (status === "PASS") return "✅";
   if (status === "WARNING") return "⚠️";
+  if (status === "PARTIAL") return "◐";
   if (status === "SKIPPED") return "⏭️";
+  if (status === "TIMEOUT") return "⌛";
+  if (status === "BLOCKED") return "🚫";
   if (status === "NOT_APPLICABLE") return "➖";
   return "❌";
 }
@@ -16,7 +19,7 @@ function countByStatus(report: AuditReport): Record<CheckResult["status"], numbe
       counts[result.status] = (counts[result.status] || 0) + 1;
       return counts;
     },
-    { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, SKIPPED: 0, NOT_APPLICABLE: 0 },
+    { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, SKIPPED: 0, NOT_APPLICABLE: 0, PARTIAL: 0, TIMEOUT: 0, BLOCKED: 0 },
   );
 }
 

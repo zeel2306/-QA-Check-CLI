@@ -97,6 +97,8 @@ export function printHelp(): void {
   console.log("  --route /about               Include a route");
   console.log("  --ignore-route /admin        Exclude a route");
   console.log("  --max-routes 20              Limit audited routes");
+  console.log("  --lighthouse-route-timeout-ms 45000  Per-route Lighthouse budget (max 120000)");
+  console.log("  --lighthouse-budget-ms 90000       Total Lighthouse budget (max 600000)");
   console.log("  --output reports             Set report folder");
   console.log("  --no-html | --no-json        Skip report formats");
   console.log("  --markdown | --no-markdown   Enable or skip Markdown report");

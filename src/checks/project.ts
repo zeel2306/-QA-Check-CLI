@@ -24,6 +24,8 @@ function exists(projectPath: string, relativePath: string): boolean {
   return fs.existsSync(path.join(projectPath, relativePath));
 }
 
+import { isExcludedDir, isProjectSourceFile } from "../utils/sourcePolicy.js";
+
 function findFiles(projectPath: string, predicate: (file: string) => boolean, maxDepth = 6): string[] {
   const found: string[] = [];
 
@@ -37,11 +39,11 @@ function findFiles(projectPath: string, predicate: (file: string) => boolean, ma
     }
 
     for (const entry of entries) {
-      if (["node_modules", "vendor", ".git", "build", "dist"].includes(entry.name)) continue;
+      if (entry.isDirectory() && isExcludedDir(entry.name)) continue;
       const absolutePath = path.join(currentPath, entry.name);
       const relativePath = path.relative(projectPath, absolutePath).replaceAll(path.sep, "/");
       if (entry.isDirectory()) walk(absolutePath, depth + 1);
-      else if (entry.isFile() && predicate(relativePath)) found.push(relativePath);
+      else if (entry.isFile() && isProjectSourceFile(relativePath, projectPath) && predicate(relativePath)) found.push(relativePath);
     }
   };
 
@@ -124,15 +126,36 @@ export const artisanCheck = () =>
 export const laravelRouteCheck = () =>
   new ShellCheck("Route Check", commandName("php"), ["artisan", "route:list"]);
 
-export const bladeValidation = () =>
-  new ValidationCheck("Blade Validation", (projectPath) => {
+export class BladeValidationCheck implements Check {
+  readonly name = "Blade Validation";
+
+  async run(projectPath: string): Promise<CheckResult> {
+    const started = performance.now();
     const blades = findFiles(projectPath, (file) => file.endsWith(".blade.php"));
+
+    if (blades.length === 0) {
+      return {
+        name: this.name,
+        status: "NOT_APPLICABLE",
+        message: "No Blade templates found",
+        skipReason: "API-only or non-Blade Laravel project",
+        duration: Math.round(performance.now() - started),
+        data: { blades: [] },
+      };
+    }
+
     return {
-      ok: blades.length > 0,
-      message: blades.length ? `${blades.length} Blade template(s) found` : "No Blade templates found",
-      data: blades.slice(0, 100),
+      name: this.name,
+      status: "PASS",
+      score: 100,
+      message: `${blades.length} Blade template(s) found`,
+      duration: Math.round(performance.now() - started),
+      data: { blades: blades.slice(0, 100) },
     };
-  });
+  }
+}
+
+export const bladeValidation = () => new BladeValidationCheck();
 
 export const publicFolderCheck = () =>
   new ValidationCheck("Public Folder Check", (projectPath) => ({
@@ -205,11 +228,25 @@ export const htmlValidation = () =>
     };
   });
 
-export const cssValidation = () =>
-  new ValidationCheck("CSS Validation", (projectPath) => {
-    const cssFiles = findFiles(projectPath, (file) => file.endsWith(".css"));
+export class CssValidationCheck implements Check {
+  readonly name = "CSS Validation";
+
+  async run(projectPath: string): Promise<CheckResult> {
+    const started = performance.now();
+    const cssFiles = findFiles(
+      projectPath,
+      (file) => file.endsWith(".css") || file.endsWith(".scss") || file.endsWith(".less") || file.endsWith(".pcss"),
+    );
+
     if (cssFiles.length === 0) {
-      return { ok: true, message: "No CSS files found to validate", data: [] };
+      return {
+        name: this.name,
+        status: "NOT_APPLICABLE",
+        message: "No CSS files found to validate",
+        skipReason: "No CSS files in project",
+        duration: Math.round(performance.now() - started),
+        data: { cssFiles: [], issues: [] },
+      };
     }
 
     const issues: string[] = [];
@@ -230,12 +267,19 @@ export const cssValidation = () =>
       }
     }
 
+    const status = issues.length === 0 ? "PASS" : "WARNING";
     return {
-      ok: issues.length === 0,
+      name: this.name,
+      status,
+      score: issues.length ? Math.max(0, 100 - issues.length * 20) : 100,
       message: issues.length ? `${issues.length} CSS validation issue(s) found` : `${cssFiles.length} CSS file(s) checked`,
+      duration: Math.round(performance.now() - started),
       data: { cssFiles: cssFiles.slice(0, 100), issues },
     };
-  });
+  }
+}
+
+export const cssValidation = () => new CssValidationCheck();
 
 export const flutterDoctor = () =>
   new ShellCheck("flutter doctor", commandName("flutter"), ["doctor"], "Flutter SDK is not installed or is not available on PATH");

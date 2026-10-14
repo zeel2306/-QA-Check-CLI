@@ -12,7 +12,9 @@ export function sanitizeSensitiveData(text: string): string {
   if (!text) return "";
   let clean = text;
   // Redact Bearer tokens and Authorization headers
-  clean = clean.replace(/(authorization:\s*bearer\s+)[^\s"']+/gi, "$1[REDACTED]");
+  clean = clean.replace(/(authorization:\s*)(?:bearer\s+)?[^\s"']+/gi, "$1[REDACTED]");
+  // Redact Cookie, Set-Cookie, X-Api-Key, X-Auth-Token headers
+  clean = clean.replace(/((?:cookie|set-cookie|x-api-key|x-auth-token):\s*)[^\s"';]+/gi, "$1[REDACTED]");
   // Redact sensitive query parameters in URLs
   clean = clean.replace(/([?&](?:token|api_key|apikey|secret|password|access_token|auth_token)=)[^&"'\s]+/gi, "$1[REDACTED]");
   return clean;
@@ -28,7 +30,10 @@ export function sanitizeAnsi<T>(input: T): T {
   if (input !== null && typeof input === "object") {
     const obj = input as Record<string, unknown>;
     const sanitized: Record<string, unknown> = {};
-    const sensitiveKeys = new Set(["password", "token", "secret", "api_key", "apikey", "access_token", "auth_token"]);
+    const sensitiveKeys = new Set([
+      "password", "token", "secret", "api_key", "apikey", "access_token", "auth_token",
+      "authorization", "cookie", "set-cookie", "x-api-key", "x-auth-token"
+    ]);
     for (const [key, val] of Object.entries(obj)) {
       if (sensitiveKeys.has(key.toLowerCase()) && typeof val === "string" && val.length > 0) {
         sanitized[key] = "[REDACTED]";
