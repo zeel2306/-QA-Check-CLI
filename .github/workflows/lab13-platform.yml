@@ -1,0 +1,90 @@
+name: Lab 13 cross-platform package integration
+on:
+  push:
+    branches: [testing-branch]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lab13:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Prepare owned temporary storage
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; import path from 'node:path'; import {resolveNpmCli} from './tests/integration/lab13-support.mjs'; fs.mkdirSync('test-reports/lab13-workflow',{recursive:true}); const tmp=fs.mkdtempSync(path.join(fs.realpathSync(process.env.RUNNER_TEMP),'qa-lab13-ci-')); const values={LAB13_TEMP:tmp,TMPDIR:tmp,TMP:tmp,TEMP:tmp,PLAYWRIGHT_BROWSERS_PATH:path.join(tmp,'browsers'),npm_execpath:await resolveNpmCli()}; fs.appendFileSync(process.env.GITHUB_ENV,Object.entries(values).map(([k,v])=>k+'='+v+'\n').join(''));"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install locked source dependencies
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          npm ci 2>&1 | Tee-Object -FilePath test-reports/lab13-workflow/npm-ci.log
+          exit $LASTEXITCODE
+      - name: Build the source to pack
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          npm run build 2>&1 | Tee-Object -FilePath test-reports/lab13-workflow/build.log
+          exit $LASTEXITCODE
+      - name: Install native Linux browser dependencies
+        if: runner.os == 'Linux'
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          node node_modules/playwright/cli.js install-deps chromium 2>&1 | Tee-Object -FilePath test-reports/lab13-workflow/browser-deps.log
+          exit $LASTEXITCODE
+      - name: Test installed tarball across platform paths
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          node tests/integration/lab13-platform.mjs 2>&1 | Tee-Object -FilePath test-reports/lab13-workflow/harness.log
+          exit $LASTEXITCODE
+      - name: Clean owned temporary processes and files
+        if: always()
+        run: |
+          if (!$env:LAB13_TEMP -or !(Test-Path -LiteralPath $env:LAB13_TEMP)) { exit 0 }
+          node --input-type=module -e "import fs from 'node:fs'; import path from 'node:path'; const p=fs.realpathSync(process.env.LAB13_TEMP); if(path.dirname(p)!==fs.realpathSync(process.env.RUNNER_TEMP)||!/^qa-lab13-ci-[a-zA-Z0-9]+$/.test(path.basename(p)))throw Error('Unsafe cleanup target');"
+          if ($LASTEXITCODE -ne 0) { throw 'Refusing unverified cleanup target' }
+          $ownedRoot = (Resolve-Path -LiteralPath $env:LAB13_TEMP).ProviderPath
+          $prefix = $ownedRoot + [IO.Path]::DirectorySeparatorChar
+          if ($IsWindows) {
+            $owned = Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.IndexOf($prefix,[StringComparison]::OrdinalIgnoreCase) -ge 0 }
+            foreach ($process in $owned) {
+              $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($process.ProcessId)"
+              if ($current.CommandLine -and $current.CommandLine.IndexOf($prefix,[StringComparison]::OrdinalIgnoreCase) -ge 0) { Stop-Process -Id $current.ProcessId -Force -ErrorAction SilentlyContinue }
+            }
+          } else {
+            $lines = & ps -axo 'pid=,command='
+            foreach ($line in $lines) {
+              if ($line -match '^\s*(\d+)\s+(.*)$') {
+                $ownedPid = [int]$Matches[1]
+                $command = $Matches[2]
+                if ($ownedPid -ne $PID -and $command.Contains($prefix)) {
+                  $current = (& ps -p $ownedPid -o 'command=') -join "`n"
+                  if ($current.Contains($prefix)) { Stop-Process -Id $ownedPid -Force -ErrorAction SilentlyContinue }
+                }
+              }
+            }
+          }
+          node --input-type=module -e "import fs from 'node:fs'; import path from 'node:path'; const p=fs.realpathSync(process.env.LAB13_TEMP); if(path.dirname(p)!==fs.realpathSync(process.env.RUNNER_TEMP)||!/^qa-lab13-ci-[a-zA-Z0-9]+$/.test(path.basename(p)))throw Error('Unsafe cleanup target'); fs.rmSync(p,{recursive:true,force:true,maxRetries:5,retryDelay:500});"
+          exit $LASTEXITCODE
+      - name: Upload platform-specific evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab13-package-${{ matrix.os }}
+          path: |
+            test-reports/lab13-platform/
+            test-reports/lab13-workflow/
+          if-no-files-found: error
+          retention-days: 14
