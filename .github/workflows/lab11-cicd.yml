@@ -30,6 +30,8 @@ jobs:
           echo "npm_execpath=$(readlink -f "$(command -v npm)")" >> "$GITHUB_ENV"
       - name: Build checked-out CLI
         run: npm run build
+      - name: Test Vite readiness handling
+        run: node --test tests/integration/vite-readiness.test.mjs
       - name: Verify clean, regression and recovery scenarios
         run: node tests/integration/lab11-cicd.mjs
       - name: Upload all scenario reports and diagnostics

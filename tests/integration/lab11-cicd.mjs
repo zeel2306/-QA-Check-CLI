@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
+import { waitForVite } from './vite-readiness.mjs';
+import { finished } from 'node:stream/promises';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const fixture = path.join(root, 'tests/fixtures/lab11-cicd');
@@ -98,20 +100,20 @@ try {
     await fs.writeFile(path.join(app, 'src/scenario.ts'), scenario === 'regression' ? clean.replace(/"(brokenImage|consoleError|networkError)": false/g, '"$1": true') : clean);
     let server;
     let log;
+    let readiness;
+    let logWrites = Promise.resolve();
     try {
       assert.equal(await run([npmCli, 'run', 'build'], app, path.join(dir, 'build.log')), 0, 'Fixture build failed');
       log = await fs.open(path.join(dir, 'server.log'), 'w');
       server = spawn(process.execPath, [path.join(app, 'node_modules/vite/bin/vite.js'), 'preview', '--host', '127.0.0.1', '--port', '0', '--strictPort'], { cwd: app, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', log.fd] });
       children.add(server);
       server.on('error', () => {});
-      let text = '';
-      const url = await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(Error('Vite readiness timed out')), 30000);
-        server.once('error', error => { clearTimeout(timer); reject(error); });
-        server.once('exit', code => { clearTimeout(timer); reject(Error(`Vite exited ${code}`)); });
-        server.stdout.on('data', data => { text += data; void log.write(data); const match = text.match(/http:\/\/127\.0\.0\.1:\d+/); if (match) { clearTimeout(timer); resolve(match[0]); } });
-      });
-      assert.equal((await fetch(url)).status, 200);
+      server.stdout.on('data', data => { logWrites = logWrites.then(() => log.write(data)); });
+      readiness = { pid: server.pid, command: server.spawnargs, host: '127.0.0.1', requestedPort: 0 };
+      const url = await waitForVite(server);
+      readiness.url = url;
+      readiness.port = Number(new URL(url).port);
+      readiness.ready = true;
       const args = [path.join(root, 'bin/qa-check.js'), app, '--ci', '--profile', 'ci', '--fail-on', 'error', '--url', url, '--output', dir, '--pdf', '--markdown', '--no-history', '--lighthouse-budget-ms', '180000'];
       args.push(...(baseline ? ['--baseline', baseline] : ['--no-baseline']));
       const exitCode = await run(args, root, path.join(dir, 'qa.log'));
@@ -123,10 +125,17 @@ try {
       // Recovery compares against regression so fixed issues must be demonstrated.
       baseline = path.join(dir, 'report.json');
     } catch (error) {
+      if (readiness) readiness.error = error.stack;
       outcomes.push({ scenario, passed: false, error: error.stack });
       // Keep validating the remaining scenarios; compare only real available reports.
       try { await fs.access(path.join(dir, 'report.json')); baseline = path.join(dir, 'report.json'); } catch { baseline = undefined; }
-    } finally { if (server) await stop(server); if (log) await log.close(); }
+    } finally {
+      if (server) await stop(server);
+      if (server?.stdout) await finished(server.stdout).catch(error => { if (readiness) readiness.stdoutError = error.message; });
+      await logWrites;
+      if (log) await log.close();
+      if (readiness) await fs.writeFile(path.join(dir, 'readiness.json'), JSON.stringify({ ...readiness, exitCode: server.exitCode, signal: server.signalCode }, null, 2));
+    }
   }
 } catch (error) { outcomes.push({ scenario: 'setup', passed: false, error: error.stack }); }
 finally {

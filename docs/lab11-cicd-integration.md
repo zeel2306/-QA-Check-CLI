@@ -41,3 +41,15 @@ All three audits completed all three routes with 100% scan coverage and FULL con
 The fixture dependency install reports 13 upstream vulnerabilities (3 moderate, 10 high). Dependencies were preserved from the existing fixture; no audit fix or unrelated package upgrades were applied.
 
 Actual Ubuntu execution of this new workflow, Linux process-group cleanup and GitHub artifact delivery remain pending. The already successful source-validation workflow does not certify this new integration job. No commit, push, merge or npm publication was performed.
+
+## ANSI readiness fix (after 57c3842)
+
+The committed harness was reproduced with FORCE_COLOR=1 and NO_COLOR unset, using a separate output folder. All three scenarios timed out and the harness exited 1. Vite had launched successfully: the diagnostic log contained `http://127.0.0.1:` followed by an ANSI bold control sequence before the port. The old URL regex returned no match, while stripping the controls revealed a reachable address returning HTTP 200. This was neither a launch failure nor an incorrect host/port. The CJS API deprecation notice on stderr was unrelated.
+
+The integration-only readiness helper strips ANSI controls after accumulating stdout chunks, requires a complete port, and polls the announced loopback URL for HTTP 200. Launch errors and child exit reject immediately, including while a probe is pending. The existing 30-second budget is unchanged. Raw stdout/stderr remain in server.log; readiness.json adds command/PID, host, requested/actual port, URL, readiness result and exit/signal diagnostics. Exit/signal values are recorded after harness cleanup, which deliberately stops Vite.
+
+Six focused tests cover decorated ports, split port chunks, HTTP retries, exit during a pending request, launch failure and timeout diagnostics. The dedicated workflow runs these tests before the real integration. The existing source-validation workflow and all scenario/gate assertions are unchanged.
+
+Build passed; complete npm test passed 282/282 with zero failures/skips. Focused readiness tests passed 6/6. Actionlint and git diff --check passed. Reproduction evidence is preserved in test-reports/lab11-readiness-repro and test-reports/workflow-validation/vite-readiness-root-cause.json.
+
+The corrected real integration was rerun with ANSI output enabled and completed with harness exit 0: clean score 100/exit 0; regression score 94/expected exit 2 with all seeded defects detected; recovery score 100/exit 0 with both gates passing. All three scans retained 100% coverage and FULL confidence. Final logs are in test-reports/workflow-validation/lab11-readiness-integration-final.log; all scenario reports, raw server logs and readiness.json files are under test-reports/lab11-cicd. No fixture or production CLI functionality was changed. The fix is locally ready for testing-branch review/push, with actual Ubuntu workflow confirmation still pending.
