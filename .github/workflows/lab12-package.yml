@@ -37,6 +37,10 @@ jobs:
       - name: Test the packed tarball in an external consumer
         run: |
           set +e
+          # Preserve resource evidence without recording process arguments/secrets.
+          ps -eo pid,ppid,stat,etime,comm > test-reports/lab12-workflow/processes-before.log
+          free -m > test-reports/lab12-workflow/memory-before.log
+          df -h "$TMPDIR" > test-reports/lab12-workflow/disk-before.log
           setsid node tests/integration/lab12-package.mjs > test-reports/lab12-workflow/harness.log 2>&1 &
           harness_pid=$!
           cleanup_processes() {
@@ -49,6 +53,8 @@ jobs:
           trap 'exit 143' TERM
           wait "$harness_pid"
           harness_status=$?
+          ps -eo pid,ppid,stat,etime,comm > test-reports/lab12-workflow/processes-after.log
+          free -m > test-reports/lab12-workflow/memory-after.log
           cat test-reports/lab12-workflow/harness.log
           exit "$harness_status"
       - name: Upload package reports and diagnostic logs

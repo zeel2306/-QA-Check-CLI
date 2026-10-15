@@ -28,6 +28,7 @@ async function run(label, args, cwd = consumer, extraEnv = {}) {
   const child = spawn(process.execPath, args, { cwd, env: { ...env, ...extraEnv }, stdio: ['ignore', log.fd, log.fd] });
   try {
     const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve(signal ? -1 : code)); });
+    await fs.writeFile(path.join(output, label + '-invocation.json'), JSON.stringify({ executable: process.execPath, args, cwd, pid: child.pid, code, chromePath: env.CHROME_PATH ?? null, freeMemory: os.freemem(), loadAverage: os.loadavg() }, null, 2));
     return { code, text: await fs.readFile(path.join(output, label + '.log'), 'utf8') };
   } finally { await log.close(); }
 }
@@ -82,6 +83,34 @@ try {
   // Browser installation is explicit, using the consumer dependency, never a global CLI.
   const playwrightCli = path.join(consumer, 'node_modules/playwright/cli.js');
   assert.equal((await run('browser-install', [playwrightCli, 'install', 'chromium'])).code, 0);
+  // Resolve from the installed consumer, never the source dependency or runner Chrome.
+  const browserSetup = path.join(consumer, 'browser-setup.mjs');
+  await fs.writeFile(browserSetup, `import {chromium} from 'playwright';
+import {Launcher} from 'chrome-launcher';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+let discovered; try { discovered=Launcher.getFirstInstallation(); } catch(error) { discovered=String(error); }
+const executable=await fs.realpath(chromium.executablePath());
+await fs.access(executable);
+await fs.writeFile(process.argv[2], JSON.stringify({executable,previousChromePath:process.env.CHROME_PATH??null,previousAutoDiscovery:discovered,platform:process.platform,node:process.version,freeMemory:os.freemem(),totalMemory:os.totalmem(),loadAverage:os.loadavg(),flags:['--headless','--no-sandbox','--disable-gpu'],launchBudgetMs:15000},null,2));`);
+  const browserEvidence = path.join(output, 'browser-environment.json');
+  assert.equal((await run('browser-setup', [browserSetup, browserEvidence])).code, 0);
+  const { executable } = JSON.parse(await fs.readFile(browserEvidence, 'utf8'));
+  env.CHROME_PATH = executable;
+  const browserProbe = path.join(consumer, 'browser-probe.mjs');
+  await fs.writeFile(browserProbe, `import {Launcher} from 'chrome-launcher';
+import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {launchLighthouseChrome} from './node_modules/qa-check-cli/dist/core/lighthouseChrome.js';
+assert.equal(await fs.realpath(Launcher.getFirstInstallation()),process.env.CHROME_PATH,'Lighthouse must select consumer Chromium');
+const started=Date.now(); let chrome;
+try {
+  chrome=await launchLighthouseChrome({chromeFlags:['--headless','--no-sandbox','--disable-gpu'],logLevel:'verbose',maxConnectionRetries:28,connectionPollInterval:500});
+  const response=await fetch('http://127.0.0.1:'+chrome.port+'/json/version',{signal:AbortSignal.timeout(3000)});
+  if(!response.ok)throw Error('Chrome CDP probe HTTP '+response.status);
+  console.log(JSON.stringify({pid:chrome.pid,port:chrome.port,startupMs:Date.now()-started,cdp:await response.json()}));
+} finally { if(chrome){await chrome.kill();console.log('Owned probe Chrome stopped');} }`);
+  assert.equal((await run('browser-probe', [...cli.slice(0, 2), browserProbe])).code, 0, 'Consumer Chromium CDP launch failed; inspect browser-probe.log');
   const init = path.join(consumer, 'init-target'); await fs.mkdir(init);
   assert.equal((await run('init', [...cli, 'init', init])).code, 0);
   for (const file of ['qa-check.config.json', '.github/workflows/qa-check.yml']) assert.ok((await fs.stat(path.join(init, file))).size > 0);
@@ -110,6 +139,8 @@ try {
     const report = JSON.parse(await fs.readFile(path.join(dir, 'report.json'), 'utf8'));
     assert.equal(report.framework, 'HTML'); assert.equal(report.currentQualityGate.confidence, 'FULL'); assert.equal(report.coverage.coveragePercent, 100);
     assert.equal(report.currentQualityGate.passed, scenario === 'clean');
+    assert.equal(report.overallScore, scenario === 'clean' ? 100 : 96);
+    assert.equal((await fs.readFile(path.join(dir, 'report.pdf'))).subarray(0, 5).toString(), '%PDF-');
     for (const check of report.results) assert.ok(!['ERROR', 'PARTIAL', 'TIMEOUT', 'BLOCKED', 'SKIPPED'].includes(check.status), `${check.name}: ${check.status}`);
     if (scenario === 'defect') {
       for (const [name, marker] of [['Broken Links', '/ghost'], ['Broken Images', '/missing.png']]) { const check = report.results.find(r => r.name === name); assert.equal(check?.status, 'FAIL'); assert.ok(JSON.stringify(check.data).includes(marker)); }
@@ -123,6 +154,9 @@ try {
   assert.equal((await run('compare-unchanged', [...cli, 'compare', baseline, baseline])).code, 0);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ passed: true, package: { name: manifest.name, version: manifest.version, size: manifest.size, unpackedSize: manifest.unpackedSize, files: manifest.files.length, integrity: manifest.integrity }, results }, null, 2));
   console.log(JSON.stringify({ passed: true, size: manifest.size, files: manifest.files.length, results }, null, 2));
+} catch (error) {
+  await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ passed: false, error: error.stack, results }, null, 2));
+  throw error;
 } finally {
   if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
   assert.equal(path.dirname(work), os.tmpdir());
