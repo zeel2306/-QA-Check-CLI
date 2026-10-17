@@ -1,0 +1,105 @@
+name: Lab 14 release readiness and security gate
+on:
+  push:
+    branches: [testing-branch]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lab14:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node: [20, 22, 24]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Prepare owned temporary storage
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; import path from 'node:path'; import {resolveNpmCli} from './tests/integration/lab13-support.mjs'; fs.mkdirSync('test-reports/lab14-workflow',{recursive:true}); const tmp=fs.mkdtempSync(path.join(fs.realpathSync(process.env.RUNNER_TEMP),'qa-lab14-ci-')); const values={LAB14_TEMP:tmp,TMPDIR:tmp,TMP:tmp,TEMP:tmp,PLAYWRIGHT_BROWSERS_PATH:path.join(tmp,'browsers'),npm_execpath:await resolveNpmCli()}; fs.appendFileSync(process.env.GITHUB_ENV,Object.entries(values).map(([k,v])=>k+'='+v+'\n').join(''));"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install locked source dependencies
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          npm ci 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/npm-ci.log
+          exit $LASTEXITCODE
+      - name: Build the source to pack
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          npm run build 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/build.log
+          exit $LASTEXITCODE
+      - name: Install native Linux browser dependencies
+        if: runner.os == 'Linux'
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          node node_modules/playwright/cli.js install-deps chromium 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/browser-deps.log
+          exit $LASTEXITCODE
+      - name: Test release security policy
+        run: node --test tests/integration/release-security.test.mjs
+      - name: Test installed tarball release readiness
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          node tests/integration/lab14-release.mjs 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/harness.log
+          exit $LASTEXITCODE
+      - name: Summarize functional and security gates separately
+        if: always()
+        run: |
+          $platform = node -p process.platform
+          $resultPath = "test-reports/lab14-release/$platform/results.json"
+          if (Test-Path -LiteralPath $resultPath) {
+            $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+            @("Release recommendation: $($result.recommendation)", "Functional gate passed: $($result.functional.passed)", "Source security: $($result.security.source.status)", "Consumer security: $($result.security.consumer.status)", "Exit code: $($result.exitCode)") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          } else {
+            'BLOCKED: release evidence missing; inspect setup/build/harness logs.' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+      - name: Clean owned temporary processes and files
+        if: always()
+        run: |
+          if (!$env:LAB14_TEMP -or !(Test-Path -LiteralPath $env:LAB14_TEMP)) { exit 0 }
+          node --input-type=module -e "import fs from 'node:fs'; import path from 'node:path'; const p=fs.realpathSync(process.env.LAB14_TEMP); if(path.dirname(p)!==fs.realpathSync(process.env.RUNNER_TEMP)||!/^qa-lab14-ci-[a-zA-Z0-9]+$/.test(path.basename(p)))throw Error('Unsafe cleanup target');"
+          if ($LASTEXITCODE -ne 0) { throw 'Refusing unverified cleanup target' }
+          $ownedRoot = (Resolve-Path -LiteralPath $env:LAB14_TEMP).ProviderPath
+          $prefix = $ownedRoot + [IO.Path]::DirectorySeparatorChar
+          if ($IsWindows) {
+            $owned = Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.IndexOf($prefix,[StringComparison]::OrdinalIgnoreCase) -ge 0 }
+            foreach ($process in $owned) {
+              $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($process.ProcessId)"
+              if ($current.CommandLine -and $current.CommandLine.IndexOf($prefix,[StringComparison]::OrdinalIgnoreCase) -ge 0) { Stop-Process -Id $current.ProcessId -Force -ErrorAction SilentlyContinue }
+            }
+          } else {
+            $lines = & ps -axo 'pid=,command='
+            foreach ($line in $lines) {
+              if ($line -match '^\s*(\d+)\s+(.*)$') {
+                $ownedPid = [int]$Matches[1]
+                $command = $Matches[2]
+                if ($ownedPid -ne $PID -and $command.Contains($prefix)) {
+                  $current = (& ps -p $ownedPid -o 'command=') -join "`n"
+                  if ($current.Contains($prefix)) { Stop-Process -Id $ownedPid -Force -ErrorAction SilentlyContinue }
+                }
+              }
+            }
+          }
+          node --input-type=module -e "import fs from 'node:fs'; import path from 'node:path'; const p=fs.realpathSync(process.env.LAB14_TEMP); if(path.dirname(p)!==fs.realpathSync(process.env.RUNNER_TEMP)||!/^qa-lab14-ci-[a-zA-Z0-9]+$/.test(path.basename(p)))throw Error('Unsafe cleanup target'); fs.rmSync(p,{recursive:true,force:true,maxRetries:5,retryDelay:500});"
+          exit $LASTEXITCODE
+      - name: Upload platform-specific evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab14-release-${{ matrix.os }}-node-${{ matrix.node }}
+          path: |
+            test-reports/lab14-release/
+            test-reports/lab14-workflow/
+          if-no-files-found: error
+          retention-days: 14

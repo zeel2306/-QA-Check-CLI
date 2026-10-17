@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { verifyPackageVersion } from './package-version.mjs';
 import { configureConsumerBrowser } from './package-browser.mjs';
 import path from 'node:path';
 import os from 'node:os';
@@ -80,6 +81,7 @@ try {
   const guard = path.join(consumer, 'isolation-loader.mjs');
   await fs.writeFile(guard, `import {fileURLToPath} from 'node:url';import path from 'node:path';const root=${JSON.stringify(consumer)};export async function resolve(s,c,next){const r=await next(s,c);if(r.url.startsWith('file:')){const rel=path.relative(root,fileURLToPath(r.url));if(rel==='..'||rel.startsWith('..'+path.sep)||path.isAbsolute(rel))throw Error('External module forbidden: '+r.url);}return r;}`);
   const cli = ['--experimental-loader', pathToFileURL(guard).href, bin];
+  await verifyPackageVersion({ consumer, pkg, cli, run });
   for (const args of [['--help'], ['help'], ['-h']]) { const r = await run('help-' + results.length, [...cli, ...args]); assert.equal(r.code, 0); assert.match(r.text, /Usage/); results.push({ command: args.join(' '), exitCode: r.code }); }
   // Browser installation is explicit, using the consumer dependency, never a global CLI.
   const playwrightCli = path.join(consumer, 'node_modules/playwright/cli.js');

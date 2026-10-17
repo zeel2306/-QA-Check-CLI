@@ -14,6 +14,12 @@ function appendOption(values: string[] | undefined, value: string | undefined): 
 async function main() {
   const args = process.argv.slice(2);
 
+  if (args[0] === "--version") {
+    const metadata = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    console.log(metadata.version);
+    return;
+  }
+
   let projectPath = process.cwd();
 
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
