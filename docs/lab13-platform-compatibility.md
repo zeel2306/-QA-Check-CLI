@@ -22,9 +22,9 @@ The harness records OS/architecture/Node/npm metadata, each command/argument arr
 
 | Platform | Local status | Hosted status |
 | --- | --- | --- |
-| Windows x64, Node 22.14.0 | PASS: build, 282/282 source tests, Lab 13 exit 0 | Pending matrix run |
-| Ubuntu, Node 22 | Not available locally | Pending matrix run |
-| macOS, Node 22 | Not available locally | Pending matrix run |
+| Windows x64, Node 22.14.0 | PASS after consumer browser selection fix | Run #2 failed startup; fix awaiting hosted rerun |
+| Ubuntu, Node 22 | Not available locally | Run #2 PASS |
+| macOS, Node 22 | Not available locally | Run #2 clean score 99; artifact unavailable for diagnosis |
 
 Local Windows validation on 2026-10-15 produced scores/exits 100/0 (clean), 96/2 (defect), and 100/0 (recovery), with 100% applicable coverage and FULL confidence throughout. All three scans generated HTML, JSON, Markdown and PDF reports. Broken Links and Broken Images detected the seeded defects; recovery recorded zero new issues and fixed issues. Both comparison commands returned their expected exits. The installed tarball contained 156 files, 148,832 compressed bytes and 632,744 unpacked bytes. Cleanup confirmed the external consumer was removed and source hashes were unchanged. Source tests: 282 passed, 0 failed, 0 skipped. Actionlint, YAML parsing, all six PowerShell step scripts, Node syntax and git diff --check passed.
 
@@ -47,7 +47,17 @@ git status --short
 
 On Ubuntu/macOS use the same npm and node commands from the repository root (with '/' path separators); Ubuntu additionally requires `node node_modules/playwright/cli.js install-deps chromium` before the harness. For custom npm installations set npm_execpath to the actual npm/bin/npm-cli.js file. No global QA Check installation is needed.
 
-## Troubleshooting
+## Lab 13 run #2 investigation (fb3fcc6)
+
+The hosted Ubuntu leg passed; Windows failed at Chrome startup and macOS reported a clean score of 99. These are separate failures. Lab 13 previously installed Playwright Chromium without selecting it for Lighthouse, which independently discovered system Chrome. The shared package-browser.mjs helper now contains Lab 12's verified consumer-specific CHROME_PATH selection and bounded CDP probe; both labs call it. All probe imports, including the Chrome lifecycle helper, come from the isolated installed consumer under its existing module guard. Paths remain separate spawn arguments, including the consumer, loader URL and working directories containing spaces. No shell quoting, source/global QA fallback, production launch timeout increase or audit retry was introduced.
+
+browser-environment.json records the consumer executable, previous automatic selection and memory/load. browser-probe.log records the real CDP browser/protocol version, startup duration, PID and owned Chrome cleanup. Lab 13 invocation files now record CHROME_PATH and resource readings. Each scenario writes score-diagnostics.json before the score assertion, retaining individual scanner scores, findings and Lighthouse metrics; the assertion also prints the scored checks. Reports and strict 100/96/100 scores, exits 0/2/0, FULL confidence and 100% coverage remain mandatory.
+
+Local Windows Node 22.14.0 validation passed: build; 282 source tests (0 failures, 0 skipped); Lab 11 scores/exits 100/0, 94/2, 100/0; Lab 12 100/0, 96/2; Lab 13 100/0, 96/2, 100/0. Lab 13's selected Chromium CDP startup was 732 ms; probe cleanup, temporary-directory removal and source hash checks passed. Local discovery evidence shows system Google Chrome was previously selected instead of consumer Chromium. This verifies the selection defect and local mitigation; the exact transient cause of the earlier hosted Windows timeout still requires its original Chrome stderr/resource evidence. The current matrix workflow remains unchanged and must be rerun on hosted Windows/macOS to validate the correction there.
+
+macOS is **not diagnosed or fixed yet**. Public Actions metadata confirms its failure, but the artifact download requires authentication (HTTP 401). The supplied local folder C:\Users\Dell\Downloads\lab13-package-macos-latest was not found, including an unrestricted read. A readable clean report.json and clean.log are required to identify the precise scanner, finding, severity and metric behind 99. No scoring change is justified by the aggregate number alone. The current overall calculation in src/core/report.ts averages scored PASS/FAIL/WARNING results (and numeric PARTIAL results), counting exact names SEO, Lighthouse, Accessibility and Performance twice, then rounds. Lighthouse Performance has weight one because that exact name is not in the doubled-name set. Do not infer a Lighthouse problem from 99 without the report, or modify weights/expectations to pass this fixture. Once the artifact is available, inspect every numeric score below 100, its data/metadata and Lighthouse route metrics, then reproduce the actual weighted sum. Hosted macOS diagnosis and the next Windows/macOS matrix runs remain outstanding.
+
+## Troubleshooting checks
 
 - Missing npm: inspect environment.json and set npm_execpath; do not substitute a global QA Check executable.
 - Permission/browser-library failure: inspect install/browser-install and scan logs; use native dependencies appropriate to the OS. Do not disable Lighthouse or PDF to pass.

@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveNpmCli } from './lab13-support.mjs';
+import { configureConsumerBrowser } from './package-browser.mjs';
 
 const root = await fs.realpath(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'));
 const npm = await resolveNpmCli();
@@ -44,7 +45,7 @@ async function run(label, args, cwd = consumer, extraEnv = {}) {
       child.once('exit', (code, signal) => resolve(signal ? -1 : code));
       timer = setTimeout(() => { void stop(child).finally(() => reject(Error(`${label} exceeded 5-minute command budget; see invocation/log`))); }, 300000);
     });
-    const [code] = await Promise.all([completion, fs.writeFile(path.join(output, label + '-invocation.json'), JSON.stringify({ executable: process.execPath, args, cwd, pid: child.pid }, null, 2))]);
+    const [code] = await Promise.all([completion, fs.writeFile(path.join(output, label + '-invocation.json'), JSON.stringify({ executable: process.execPath, args, cwd, pid: child.pid, chromePath: env.CHROME_PATH ?? null, freeMemory: os.freemem(), loadAverage: os.loadavg() }, null, 2))]);
     return { code, text: await fs.readFile(path.join(output, label + '.log'), 'utf8') };
   } finally { clearTimeout(timer); await stop(child); children.delete(child); await log.close(); }
 }
@@ -132,6 +133,7 @@ try {
   // Browser installation is explicit, using the consumer dependency, never a global CLI.
   const playwrightCli = path.join(consumer, 'node_modules/playwright/cli.js');
   assert.equal((await run('browser-install', [playwrightCli, 'install', 'chromium'])).code, 0);
+  await configureConsumerBrowser({ consumer, output, env, run, loaderArgs: cli.slice(0, 2) });
   const init = path.join(consumer, 'init target with spaces'); await fs.mkdir(init);
   assert.equal((await run('init', [...cli, 'init', init])).code, 0);
   for (const file of ['qa-check.config.json', '.github/workflows/qa-check.yml']) assert.ok((await fs.stat(path.join(init, file))).size > 0);
@@ -171,9 +173,13 @@ try {
     assert.equal(r.code, scenario === 'defect' ? 2 : 0, r.text.slice(-3000));
     for (const file of ['index.html', 'report.json', 'report.md', 'report.pdf']) assert.ok((await fs.stat(path.join(dir, file))).size > 0, `Missing report ${file}`);
     const report = JSON.parse(await fs.readFile(path.join(dir, 'report.json'), 'utf8'));
+    const scoreEvidence = { scenario, expectedScore: scenario === 'defect' ? 96 : 100, actualScore: report.overallScore,
+      scanners: report.results.map(({ name, status, score, message, data, metadata }) => ({ name, status, score, message, data, metadata })),
+      resources: { freeMemory: os.freemem(), loadAverage: os.loadavg() }, chromePath: env.CHROME_PATH };
+    await fs.writeFile(path.join(dir, 'score-diagnostics.json'), JSON.stringify(scoreEvidence, null, 2));
     assert.equal(report.framework, 'HTML'); assert.equal(report.currentQualityGate.confidence, 'FULL'); assert.equal(report.coverage.coveragePercent, 100);
     assert.equal(report.currentQualityGate.passed, scenario !== 'defect');
-    assert.equal(report.overallScore, scenario === 'defect' ? 96 : 100, 'Platform score differs from fixture contract');
+    assert.equal(report.overallScore, scenario === 'defect' ? 96 : 100, `Platform score differs from fixture contract; inspect score-diagnostics.json. Scored checks: ${JSON.stringify(report.results.filter(r => typeof r.score === 'number').map(({ name, status, score }) => ({ name, status, score })))}`);
     assert.equal(await fs.realpath(report.projectPath), html);
     assert.deepEqual(report.routes, ['/']);
     assert.equal((await fs.readFile(path.join(dir, 'report.pdf'))).subarray(0, 5).toString(), '%PDF-');
