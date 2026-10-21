@@ -1,7 +1,7 @@
 name: Lab 12 npm package integration
 on:
   push:
-    branches: [testing-branch]
+    branches: [testing-branch, codex/lighthouse-13-5-experiment]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '22.19.0'
           cache: npm
       - name: Prepare isolated temporary storage and diagnostics
         run: |

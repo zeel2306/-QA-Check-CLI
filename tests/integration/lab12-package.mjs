@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { verifyPackageVersion } from './package-version.mjs';
 import { configureConsumerBrowser } from './package-browser.mjs';
+import { resolveNpmCli, isOutsideDirectory } from './lab13-support.mjs';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
@@ -9,12 +10,14 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const root = await fs.realpath(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'));
 const output = path.join(root, 'test-reports/lab12-package');
-const work = await fs.mkdtemp(path.join(os.tmpdir(), 'qa-lab12-'));
-assert.ok(path.relative(root, work).startsWith('..'), 'Consumer must be outside source checkout');
+// Canonical paths avoid /var versus /private/var false symlink failures on macOS.
+const temporaryParent = await fs.realpath(os.tmpdir());
+const work = await fs.mkdtemp(path.join(temporaryParent, 'qa-lab12-'));
+assert.ok(isOutsideDirectory(root, work), 'Consumer must be outside source checkout');
 const consumer = path.join(work, 'consumer');
-const npm = process.env.npm_execpath || path.join(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js');
+const npm = await resolveNpmCli();
 const results = [];
 let server;
 assert.equal(path.dirname(output), path.join(root, 'test-reports'));
@@ -135,7 +138,7 @@ try {
   throw error;
 } finally {
   if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
-  assert.equal(path.dirname(work), os.tmpdir());
+  assert.equal(path.dirname(work), temporaryParent);
   await fs.rm(work, { recursive: true, force: true });
   await assert.rejects(fs.access(work));
   assert.equal(await snapshot(), before, 'Source repository changed during package validation');

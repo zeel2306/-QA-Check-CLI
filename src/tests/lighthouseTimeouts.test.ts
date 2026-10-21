@@ -39,8 +39,19 @@ test('first route timeout preserves reason, cancels worker, replaces Chrome and 
 test('initialization is bounded separately and does not consume the first route deadline',async()=>{
  const r=runtime(async()=>lhr());r.api.prepareAudit=async()=>{await new Promise(resolve=>setTimeout(resolve,20));};const result=await new LighthouseCheck('http://test.local',['/'],true,1000,r.api,undefined,5).run('.');assert.equal(result.status,'PASS');assert.ok((result.metadata?.initializationDiagnostics as any[])[0].durationMs>=15);
 });
-test('total budget exhaustion preserves unattempted routes and no synthetic page scores',async()=>{
- const r=runtime(async url=>new URL(url).pathname==='/'?lhr():new Promise(()=>{}));const result=await new LighthouseCheck('http://test.local',['/','/contact','/products'],true,30,r.api,undefined,100).run('.');assert.equal(result.status,'PARTIAL');assert.deepEqual(result.metadata?.unattemptedRoutes,['/products']);assert.equal(result.data?.length,1);assert.match((result.metadata?.routeDiagnostics as any[])[1].error,/total budget/);
+test('total budget exhaustion preserves unattempted routes and no synthetic page scores',async t=>{
+ // A real 30ms wall-clock budget can expire before the first mocked route runs
+ // under parallel browser-test load. Advance both clocks only once route two
+ // has started, so this tests total-budget exhaustion rather than scheduling.
+ let now=0;t.mock.method(performance,'now',()=>now);
+ t.mock.timers.enable({apis:['setTimeout']});
+ let reachedSecond!:()=>void;const secondStarted=new Promise<void>(resolve=>{reachedSecond=resolve;});
+ const r=runtime(async url=>{if(new URL(url).pathname==='/')return lhr();reachedSecond();return new Promise(()=>{});});
+ const running=new LighthouseCheck('http://test.local',['/','/contact','/products'],true,30,r.api,undefined,100).run('.');
+ await secondStarted;now=30;t.mock.timers.tick(30);
+ const result=await running;
+ assert.equal(result.status,'PARTIAL');assert.deepEqual(result.metadata?.unattemptedRoutes,['/products']);assert.equal(result.data?.length,1);assert.match((result.metadata?.routeDiagnostics as any[])[1].error,/total budget/);
+ assert.equal(result.pagesCompleted,1);assert.equal(result.pagesAttempted,2);assert.equal((result.metadata?.routeDiagnostics as any[])[1].status,'TIMED_OUT');
 });
 test('cleanup failure does not mask a route timeout or mark completed scores as a complete pass',async()=>{
  const r=runtime(async url=>new URL(url).pathname==='/'?lhr():new Promise(()=>{}),async()=>{throw Error('Chrome still locked');});const result=await new LighthouseCheck('http://test.local',['/','/contact','/products'],true,1000,r.api,undefined,10).run('.');assert.equal(result.status,'PARTIAL');assert.equal((result.metadata?.routeDiagnostics as any[])[1].status,'TIMED_OUT');assert.equal(result.metadata?.stopReason,'CLEANUP_FAILED');assert.match(result.message!,/cleanup incomplete/);assert.deepEqual(result.metadata?.unattemptedRoutes,['/products']);

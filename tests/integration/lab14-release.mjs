@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SECURITY_POLICY, auditProduction } from './release-security.mjs';
 import { resolveNpmCli } from './lab13-support.mjs';
 import { configureConsumerBrowser } from './package-browser.mjs';
+import { supportsNodeVersion } from '../../dist/core/nodeVersion.js';
 
 const root = await fs.realpath(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'));
 const npm = await resolveNpmCli();
@@ -106,8 +107,8 @@ try {
   const lock=JSON.parse(await fs.readFile(path.join(root,'package-lock.json'),'utf8'));
   assert.equal(sourcePackage.name,lock.name);assert.equal(sourcePackage.version,lock.version);
   assert.equal(sourcePackage.version,lock.packages[''].version);
-  assert.equal(sourcePackage.engines.node,'>=20');
-  assert.ok(Number(process.versions.node.split('.')[0])>=20,'Node 20+ required');
+  assert.equal(sourcePackage.engines.node,'>=22.19');
+  assert.ok(supportsNodeVersion(process.versions.node,sourcePackage.engines.node),'Node 22.19+ required');
   security.source=await auditProduction({run,npm,cwd:root,output,label:'audit-source'});
   assert.equal((await run('build', [npm, 'run', 'build'], root)).code, 0, 'Source build failed');
   const dry = await run('pack-dry-run', [npm, 'pack', '--dry-run', '--json'], root);

@@ -4,6 +4,7 @@ import { Worker } from "node:worker_threads";
 import type { Check, CheckResult } from "../types/result.js";
 import { DEFAULT_LIGHTHOUSE_ROUTE_TIMEOUT_MS, lighthouseRouteTimeout } from "../core/lighthouseSettings.js";
 import { launchLighthouseChrome } from "../core/lighthouseChrome.js";
+import { lighthouseMetrics } from "../core/lighthouseMetrics.js";
 
 interface LighthousePage {
   route: string;
@@ -12,6 +13,8 @@ interface LighthousePage {
   seo: number | null;
   bestPractices: number | null;
   metrics: Record<string, number | undefined>;
+  lighthouseVersion?: string;
+  metricSources?: Record<string, string>;
 }
 
 export interface LighthouseToolingDiagnostic { code: string; message: string; route?: string; origin: string; }
@@ -364,13 +367,8 @@ export class LighthouseCheck implements Check<LighthousePage[]> {
             accessibility: score(result.lhr.categories.accessibility?.score),
             seo: score(result.lhr.categories.seo?.score),
             bestPractices: score(result.lhr.categories["best-practices"]?.score),
-            metrics: {
-              CLS: audits["cumulative-layout-shift"]?.numericValue,
-              LCP: audits["largest-contentful-paint"]?.numericValue,
-              FCP: audits["first-contentful-paint"]?.numericValue,
-              INP: audits["interaction-to-next-paint"]?.numericValue,
-              TTFB: audits["server-response-time"]?.numericValue,
-            },
+            lighthouseVersion: result.lhr.lighthouseVersion,
+            ...lighthouseMetrics(audits),
           });
           if (score(result.lhr.categories.performance?.score) !== null) scoredRoutes.push(route);
 

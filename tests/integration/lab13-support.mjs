@@ -1,6 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+/** Callers supply canonical absolute paths; other volumes are external too. */
+export function isOutsideDirectory(root, target, api = path) {
+  if (!api.isAbsolute(root) || !api.isAbsolute(target)) return false;
+  const relative = api.relative(root, target);
+  return relative === '..' || relative.startsWith('..' + api.sep) || api.isAbsolute(relative);
+}
+
 /** Resolve npm's JS entrypoint without npm.cmd, shells, or Linux-only readlink. */
 export async function resolveNpmCli() {
   const nodeHome = path.dirname(process.execPath);

@@ -2,7 +2,7 @@ name: QA Check
 
 on:
   push:
-    branches: [testing-branch]
+    branches: [testing-branch, codex/lighthouse-13-5-experiment]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -43,7 +43,7 @@ permissions:
   pull-requests: write
 
 env:
-  NODE_VERSION: '22'
+  NODE_VERSION: '22.19.0'
   QA_PROFILE: ${{ github.event.inputs.profile || 'ci' }}
   FAIL_ON: ${{ github.event.inputs.fail_on || 'profile' }}
   MIN_SCORE: ${{ github.event.inputs.min_score || 'profile' }}

@@ -1,4 +1,5 @@
 import fs from "fs";
+import { requireSupportedNode } from "./core/nodeVersion.js";
 import path from "path";
 import type { QaEngineOptions } from "./core/engine.js";
 import { loadConfig } from "./core/config.js";
@@ -12,6 +13,7 @@ function appendOption(values: string[] | undefined, value: string | undefined): 
 }
 
 async function main() {
+  requireSupportedNode();
   const args = process.argv.slice(2);
 
   if (args[0] === "--version") {
