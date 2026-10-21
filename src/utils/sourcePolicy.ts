@@ -34,7 +34,7 @@ export const DEFAULT_EXCLUDED_DIRECTORIES: readonly string[] = [
 ];
 
 /**
- * Centralized glob ignore patterns for fast-glob across all static scanners.
+ * Centralized glob ignore patterns across all static scanners.
  */
 export const SOURCE_GLOB_IGNORE: readonly string[] = [
   "**/node_modules/**",

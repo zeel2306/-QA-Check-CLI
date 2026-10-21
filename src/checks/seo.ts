@@ -1,6 +1,6 @@
 import fsp from "fs/promises";
 import path from "path";
-import fg from "fast-glob";
+import fg from "../utils/sourceGlob.js";
 import { BrowserCheck } from "./base.js";
 import type { BrowserIssue, CheckResult } from "../types/result.js";
 import { deduplicateFindings, toCanonicalRoute } from "../core/canonical.js";

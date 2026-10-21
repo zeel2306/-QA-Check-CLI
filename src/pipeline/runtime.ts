@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs/promises";
-import fg from "fast-glob";
+import fg from "../utils/sourceGlob.js";
 import { discoverRoutes } from "../crawler.js";
 import { LighthouseCheck } from "../checks/lighthouse.js";
 import { ApiTestingCheck, verifyApiTarget } from "../checks/api.js";

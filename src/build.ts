@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import fsp from "node:fs/promises";
-import fg from "fast-glob";
+import fg from "./utils/sourceGlob.js";
 
 export interface ProjectMutation {
   file: string;

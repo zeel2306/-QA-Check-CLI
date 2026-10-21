@@ -1,7 +1,7 @@
 import { runCommand } from "./utils.js";
 import fs from "fs";
 import path from "path";
-import fg from "fast-glob";
+import fg from "./utils/sourceGlob.js";
 import { SOURCE_GLOB_IGNORE } from "./utils/sourcePolicy.js";
 
 export async function eslintArguments(projectPath: string): Promise<string[]> {

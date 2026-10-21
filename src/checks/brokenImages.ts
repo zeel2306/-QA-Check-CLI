@@ -2,7 +2,7 @@ import { SOURCE_GLOB_IGNORE } from "../utils/sourcePolicy.js";
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
-import fg from "fast-glob";
+import fg from "../utils/sourceGlob.js";
 import { BrowserCheck } from "./base.js";
 import type { CheckResult } from "../types/result.js";
 import { deduplicateFindings, toCanonicalAssetPath } from "../core/canonical.js";

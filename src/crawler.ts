@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import fg from "fast-glob";
+import fg from "./utils/sourceGlob.js";
 
 import { detectProjectFramework } from "./framework.js";
 import { extractDeclaredRoutes, normalizeDeclaredRoute, normalizeRoutePath } from "./utils/routes.js";

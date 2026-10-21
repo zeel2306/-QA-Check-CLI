@@ -1,7 +1,7 @@
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
-import fg from "fast-glob";
+import fg from "../utils/sourceGlob.js";
 import { execa } from "execa";
 import type { Check, CheckResult } from "../types/result.js";
 
