@@ -1,5 +1,9 @@
 # Lab 12 — local npm tarball validation
 
+> Historical 1.3.0 validation record. The proposed 2.0.0 release requires Node.js
+> >=22.19 and addresses the build-hook/license follow-ups below. See
+> [current release readiness](v2-release-readiness.md) for fresh results.
+
 Run `node tests/integration/lab12-package.mjs` from the repository root. It builds the current source, inspects npm pack --dry-run, packs to an OS temporary directory, installs the .tgz with --omit=dev into a fresh external consumer, installs that consumer's Playwright Chromium, and exercises its installed bin. Nothing is published.
 
 The tested artifact is qa-check-cli 1.3.0 (the product's v2 label does not change npm metadata). Package files are bin/qa-check.js, 153 compiled dist JavaScript files, README.md and package.json: 156 files, 148,832 bytes compressed and 632,744 bytes unpacked in the inspected build. The final exact size, integrity and complete file/mode/size inventory are emitted to test-reports/lab12-package/package-manifest.json. The package has an ESM main and bin mapping, no exports map, declaration files or supported library API. CLI imports resolve inside the installed package.

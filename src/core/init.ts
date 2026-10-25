@@ -44,7 +44,7 @@ permissions:
   pull-requests: write
 
 env:
-  NODE_VERSION: 20
+  NODE_VERSION: '22.19.0'
   QA_PROFILE: ci
   REPORT_DIR: reports
   QA_CHECK_PACKAGE: qa-check-cli@latest

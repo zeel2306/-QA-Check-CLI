@@ -100,14 +100,14 @@ async function snapshot() {
 const before = await snapshot();
 try {
   assert.equal((await run('build', [npm, 'run', 'build'], root)).code, 0, 'Source build failed');
-  const dry = await run('pack-dry-run', [npm, 'pack', '--dry-run', '--json'], root);
+  const dry = await run('pack-dry-run', [npm, 'pack', '--dry-run', '--json', '--foreground-scripts=false'], root);
   assert.equal(dry.code, 0, 'npm pack dry run failed');
   const [dryPack] = JSON.parse(dry.text);
   const paths = dryPack.files.map(file => file.path);
   for (const required of ['package.json', 'bin/qa-check.js', 'dist/index.js', 'dist/core/doctor.js', 'dist/reporters/html.js', 'dist/reporters/pdf.js']) assert.ok(paths.includes(required), `Missing runtime file ${required}`);
   for (const file of paths) assert.ok(/^(README(?:\.[^/]+)?|LICENSE(?:\.[^/]+)?|package\.json|bin\/[^/]+\.js|dist\/(?!tests\/).+\.js)$/i.test(file), `Unexpected packaged artifact ${file}`);
   for (const file of paths) assert.ok(!/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\bnpm_[A-Za-z0-9]{36}\b/.test(await fs.readFile(path.join(root, file), 'utf8')), `Potential secret in ${file}`);
-  const packed = await run('pack', [npm, 'pack', '--json', '--pack-destination', work], root);
+  const packed = await run('pack', [npm, 'pack', '--json', '--foreground-scripts=false', '--pack-destination', work], root);
   assert.equal(packed.code, 0);
   const [manifest] = JSON.parse(packed.text);
   assert.deepEqual(manifest.files, dryPack.files);

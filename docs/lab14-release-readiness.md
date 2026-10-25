@@ -1,5 +1,10 @@
 # Lab 14 — release readiness and security gate
 
+> Historical pre-migration validation record. Its BLOCKED status and audit counts
+> describe that earlier dependency tree. The proposed 2.0.0 release requires
+> Node.js >=22.19; see [current release readiness](v2-release-readiness.md) for
+> fresh source/consumer audits under the same security policy.
+
 Recommendation: **BLOCKED by security findings; functional gate PASS**. This lab validates a controlled release candidate; it never publishes. Work is on testing-branch, based on c1a0436. The version-command fix changes only the CLI entry point's early handling of --version. Dependency manifests, scanner behavior and existing workflows remain unchanged.
 
 ## Scope and reproducibility
