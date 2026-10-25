@@ -59,4 +59,34 @@ export const codeQualitySuggestions: SuggestionMap = {
     ],
     shortFix: "Extract smaller Flutter widgets from the large build method.",
   },
+  "no-alert": {
+    code: "no-alert",
+    title: "No Alert",
+    problem: "Native alert() dialog blocks script execution and degrades user experience.",
+    whyItMatters: "Modal alert dialogs disrupt user interaction and cannot be customized.",
+    suggestedFix: [
+      "Replace alert() with application UI feedback such as a toast, dialog, or controlled notification.",
+    ],
+    shortFix: "Replace alert() with application UI feedback such as a toast, dialog, or controlled notification.",
+  },
+  "unhandled-fetch": {
+    code: "unhandled-fetch",
+    title: "Unhandled Fetch Error",
+    problem: "Asynchronous fetch requests lack error handling for network or HTTP failures.",
+    whyItMatters: "Unhandled promises cause silent UI breakage or uncaught promise rejections.",
+    suggestedFix: [
+      "Handle rejected requests and non-2xx responses using try/catch or explicit promise/error handling.",
+    ],
+    shortFix: "Handle rejected requests and non-2xx responses using try/catch or explicit promise/error handling.",
+  },
+  "unhandled-fetch-error": {
+    code: "unhandled-fetch-error",
+    title: "Unhandled Fetch Error",
+    problem: "Asynchronous fetch requests lack error handling for network or HTTP failures.",
+    whyItMatters: "Unhandled promises cause silent UI breakage or uncaught promise rejections.",
+    suggestedFix: [
+      "Handle rejected requests and non-2xx responses using try/catch or explicit promise/error handling.",
+    ],
+    shortFix: "Handle rejected requests and non-2xx responses using try/catch or explicit promise/error handling.",
+  },
 };

@@ -1,0 +1,95 @@
+name: Lab 12 npm package integration
+on:
+  push:
+    branches: [testing-branch, codex/lighthouse-13-5-experiment]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lab12:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - name: Prepare isolated temporary storage and diagnostics
+        run: |
+          mkdir -p test-reports/lab12-workflow
+          temporary_root=$(mktemp -d "$RUNNER_TEMP/qa-lab12.XXXXXXXX")
+          echo "TMPDIR=$temporary_root" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$temporary_root/browsers" >> "$GITHUB_ENV"
+          echo "npm_execpath=$(readlink -f "$(command -v npm)")" >> "$GITHUB_ENV"
+      - name: Install source dependencies
+        run: npm ci 2>&1 | tee test-reports/lab12-workflow/npm-ci.log
+      - name: Build the CLI
+        run: npm run build 2>&1 | tee test-reports/lab12-workflow/build.log
+      - name: Install Chromium native dependencies
+        # The harness installs Chromium using the external consumer's Playwright.
+        run: node node_modules/playwright/cli.js install-deps chromium 2>&1 | tee test-reports/lab12-workflow/browser-deps.log
+      - name: Test the packed tarball in an external consumer
+        run: |
+          set +e
+          # Preserve resource evidence without recording process arguments/secrets.
+          ps -eo pid,ppid,stat,etime,comm > test-reports/lab12-workflow/processes-before.log
+          free -m > test-reports/lab12-workflow/memory-before.log
+          df -h "$TMPDIR" > test-reports/lab12-workflow/disk-before.log
+          setsid node tests/integration/lab12-package.mjs > test-reports/lab12-workflow/harness.log 2>&1 &
+          harness_pid=$!
+          cleanup_processes() {
+            kill -TERM -- "-$harness_pid" 2>/dev/null || true
+            sleep 1
+            kill -KILL -- "-$harness_pid" 2>/dev/null || true
+          }
+          trap cleanup_processes EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          wait "$harness_pid"
+          harness_status=$?
+          ps -eo pid,ppid,stat,etime,comm > test-reports/lab12-workflow/processes-after.log
+          free -m > test-reports/lab12-workflow/memory-after.log
+          cat test-reports/lab12-workflow/harness.log
+          exit "$harness_status"
+      - name: Upload package reports and diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab12-package-evidence
+          path: |
+            test-reports/lab12-package/
+            test-reports/lab12-workflow/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove owned temporary files and browser installation
+        if: always()
+        run: |
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const target = process.env.TMPDIR;
+          if (!target || !fs.existsSync(target)) process.exit(0);
+          const resolved = fs.realpathSync(target);
+          if (path.dirname(resolved) !== fs.realpathSync(process.env.RUNNER_TEMP) || !/^qa-lab12\.[a-zA-Z0-9]+$/.test(path.basename(resolved))) throw new Error('Refusing unsafe temporary cleanup');
+          // Chrome can create a detached session. Identify only processes using
+          // this job's private directory, never unrelated runner processes.
+          const owned = pid => {
+            if (Number(pid) === process.pid) return false;
+            try {
+              const command = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+              const cwd = fs.readlinkSync(`/proc/${pid}/cwd`);
+              return command.includes(resolved + path.sep) || cwd === resolved || cwd.startsWith(resolved + path.sep);
+            } catch { return false; }
+          };
+          const pids = fs.readdirSync('/proc').filter(pid => /^\d+$/.test(pid) && owned(pid));
+          for (const pid of pids) { try { process.kill(Number(pid), 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+          if (pids.length) await new Promise(resolve => setTimeout(resolve, 500));
+          for (const pid of pids) if (owned(pid)) { try { process.kill(Number(pid), 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
+          fs.rmSync(resolved, { recursive: true, force: true });
+          NODE

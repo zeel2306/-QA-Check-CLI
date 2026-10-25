@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import chalk from "chalk";
 import { detectProjectFramework } from "../framework/detect.js";
+import { supportsNodeVersion } from "./nodeVersion.js";
 
 export interface DoctorCheckItem {
   name: string;
@@ -28,18 +29,18 @@ export async function runDoctor(projectPath: string): Promise<DoctorReport> {
 
   // 1. Node.js Version Check
   const nodeVersionStr = process.version;
-  const majorVersion = parseInt(nodeVersionStr.replace(/^v/, "").split(".")[0] || "0", 10);
-  if (majorVersion >= 20) {
+  const engine = JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8")).engines.node;
+  if (supportsNodeVersion(process.versions.node, engine)) {
     items.push({
       name: "Node.js Environment",
       status: "PASS",
-      message: `Node.js ${nodeVersionStr} available (Node 20+ required)`,
+      message: `Node.js ${nodeVersionStr} available (Node ${engine} required)`,
     });
   } else {
     items.push({
       name: "Node.js Environment",
-      status: "WARNING",
-      message: `Node.js ${nodeVersionStr} detected. Node 20 or higher is recommended for full features.`,
+      status: "FAIL",
+      message: `Node.js ${nodeVersionStr} detected. Node ${engine} is required.`,
     });
   }
 

@@ -14,6 +14,7 @@ export type IssueCategory =
   | "lighthouse"
   | "project"
   | "api"
+  | "security"
   | "unknown";
 
 export type IssueSeverity = "info" | "warning" | "error";

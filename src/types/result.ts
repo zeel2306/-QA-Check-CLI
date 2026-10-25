@@ -1,16 +1,51 @@
 import type { IssueCategory, QAIssue } from "./issue.js";
 
-export type CheckStatus = "PASS" | "FAIL" | "WARNING" | "SKIPPED" | "ERROR";
+export type CheckStatus =
+  | "PASS"
+  | "FAIL"
+  | "WARNING"
+  | "SKIPPED"
+  | "ERROR"
+  | "NOT_APPLICABLE"
+  | "PARTIAL"
+  | "TIMEOUT"
+  | "BLOCKED";
+
+export interface PageAuditSummary {
+  eligible: number;
+  attempted: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  timedOut: number;
+  blocked: number;
+  unverified: number;
+}
+
+export interface PerRouteTargetAudit {
+  route: string;
+  status: "PASSED" | "FAILED" | "TIMED_OUT" | "BLOCKED" | "SKIPPED";
+  durationMs?: number;
+  issuesCount?: number;
+  errorMessage?: string;
+}
 
 export interface CheckResult<T = unknown> {
   name: string;
   category?: IssueCategory;
   status: CheckStatus;
-  score?: number;
+  score?: number | null;
   message?: string;
   duration: number;
   startedAt?: string;
   finishedAt?: string;
+  skipReason?: string;
+  errorReason?: string;
+  pagesAttempted?: number;
+  pagesCompleted?: number;
+  pagesDiscovered?: number;
+  pageSummary?: PageAuditSummary;
+  routeAudits?: PerRouteTargetAudit[];
   issues?: QAIssue[];
   error?: {
     name: string;
@@ -28,6 +63,30 @@ export interface Check<T = unknown> {
   run(projectPath: string): Promise<CheckResult<T>>;
 }
 
+export interface ScanCoverage {
+  applicableScanners: number;
+  executedSuccessfully: number;
+  skipped: number;
+  errors: number;
+  notApplicable: number;
+  partial?: number;
+  timedOut?: number;
+  blocked?: number;
+  coveragePercent: number;
+}
+
+export interface CurrentQualityGate {
+  passed: boolean;
+  status?: "PASSED" | "FAILED" | "INCOMPLETE";
+  confidence?: "FULL" | "PARTIAL" | "FAST_PROFILE";
+  confidencePercent?: number;
+  reasons: string[];
+  failingChecks: string[];
+  warningChecks?: string[];
+  skippedChecks?: string[];
+  erroredChecks?: string[];
+}
+
 export interface AuditReport {
   version: 2;
   projectPath: string;
@@ -38,18 +97,28 @@ export interface AuditReport {
   pipeline: string;
   checksExecuted: string[];
   checksSkipped: string[];
+  checksNotApplicable?: string[];
   baseUrl?: string;
+  runtime?: import("../core/readiness.js").RuntimeDiagnostics;
   routes: string[];
   startedAt: string;
   finishedAt: string;
   duration: number;
   overallScore: number;
+  scoreEvidence?: { status: "COMPLETE" | "PROVISIONAL" | "INSUFFICIENT_EVIDENCE"; observedScore: number | null; missingScanners: string[]; warning?: string };
+  coverage?: ScanCoverage;
+  currentQualityGate?: CurrentQualityGate;
+  rawObservations?: number;
+  uniqueDefects?: number;
+  canonicalDefects?: any[];
   results: CheckResult[];
   baseline?: BaselineComparison;
   history?: HistoryTrend;
 }
 
 export interface HistorySnapshot {
+  comparable?: boolean;
+  executionKey?: string;
   version: number;
   projectPath: string;
   framework: string;
@@ -68,10 +137,84 @@ export interface HistorySnapshot {
 }
 
 export interface HistoryTrend {
+  comparable?: boolean;
+  reason?: string;
   historyDir?: string;
   runs: HistorySnapshot[];
   scoreDelta?: number;
   issueDelta?: number;
+}
+
+export interface FingerprintedIssue {
+  id: string;
+  checkName: string;
+  category?: string;
+  type?: string;
+  message: string;
+  route?: string;
+  url?: string;
+  target?: string;
+  method?: string;
+  file?: string;
+  line?: number;
+  selector?: string;
+}
+
+export interface CategoryScoreComparison {
+  category: string;
+  currentScore: number;
+  previousScore: number;
+  delta: number;
+  tolerance?: number;
+  status: "STABLE" | "REGRESSED" | "IMPROVED" | "INCOMPARABLE";
+}
+
+export interface RegressionQualityGate {
+  passed: boolean;
+  scoreRegressed: boolean;
+  newIssuesCount: number;
+  regressedChecksCount: number;
+  reasons: string[];
+}
+
+export interface ScannerExecutionChange {
+  checkName: string;
+  previousStatus: CheckStatus;
+  currentStatus: CheckStatus;
+  description: string;
+}
+
+export interface ScannerComparisonState {
+  checkName: string;
+  status: "STABLE" | "IMPROVED" | "REGRESSED" | "UNAVAILABLE";
+  reason?: string;
+  previousStatus?: CheckStatus;
+  currentStatus: CheckStatus;
+}
+
+export interface CategorizedIssues {
+  newIssues: FingerprintedIssue[];
+  fixedIssues: FingerprintedIssue[];
+  existingIssues: FingerprintedIssue[];
+  regressedChecks: {
+    checkName: string;
+    previousScore: number;
+    currentScore: number;
+    scoreDelta: number;
+    previousStatus: CheckStatus;
+    currentStatus: CheckStatus;
+  }[];
+  scannerExecutionChanges?: ScannerExecutionChange[];
+  scannerComparisonStates?: ScannerComparisonState[];
+}
+
+export interface MetricChangeComparison {
+  name: string;
+  previous: number;
+  current: number;
+  delta: number;
+  tolerance: number;
+  status: "STABLE" | "REGRESSED" | "IMPROVED";
 }
 
 export interface BaselineComparison {
@@ -88,6 +231,10 @@ export interface BaselineComparison {
     previous: number;
     delta: number;
   };
+  qualityGate: RegressionQualityGate;
+  categoryScores: CategoryScoreComparison[];
+  metricChanges?: MetricChangeComparison[];
+  categorizedIssues: CategorizedIssues;
   checks: BaselineCheckComparison[];
 }
 
@@ -117,4 +264,9 @@ export interface BrowserIssue {
   message: string;
   selector?: string;
   url?: string;
+  method?: string;
+  status?: number;
+  statusText?: string;
+  resourceType?: string;
+  reason?: string;
 }

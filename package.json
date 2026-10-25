@@ -1,6 +1,6 @@
 {
   "name": "qa-check-cli",
-  "version": "1.1.5",
+  "version": "2.0.0",
   "description": "Universal QA CLI for web projects.",
   "type": "module",
   "main": "./dist/index.js",
@@ -9,12 +9,15 @@
   },
   "files": [
     "bin",
-    "dist"
+    "dist",
+    "!dist/tests"
   ],
   "scripts": {
     "build": "tsc",
+    "prepack": "npm run build",
     "dev": "ts-node src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "npm run build && node --test dist/tests/*.test.js"
   },
   "keywords": [
     "qa",
@@ -39,10 +42,10 @@
     "chalk": "^5.6.2",
     "chrome-launcher": "^1.2.1",
     "execa": "^9.6.1",
-    "fast-glob": "^3.3.3",
-    "lighthouse": "^12.8.2",
+    "lighthouse": "^13.5.0",
     "pdfkit": "^0.19.1",
-    "playwright": "^1.61.1"
+    "playwright": "^1.61.1",
+    "tinyglobby": "^0.2.17"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
@@ -50,6 +53,6 @@
     "typescript": "^7.0.2"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19"
   }
 }

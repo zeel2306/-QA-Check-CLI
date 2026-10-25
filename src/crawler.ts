@@ -1,8 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
-import fg from "fast-glob";
+import fg from "./utils/sourceGlob.js";
 
 import { detectProjectFramework } from "./framework.js";
+import { extractDeclaredRoutes, normalizeDeclaredRoute, normalizeRoutePath } from "./utils/routes.js";
+import { runCommand } from "./utils.js";
 
 const SOURCE_EXTENSIONS = "{js,jsx,ts,tsx,mjs,cjs,vue,astro}";
 const GLOB_IGNORE = ["**/node_modules/**", "**/.next/**", "**/dist/**", "**/coverage/**"];
@@ -16,15 +18,7 @@ function toPosixPath(filePath: string): string {
 
 /** Produces a normalized URL route while preserving dynamic placeholders. */
 function normalizeRoute(route: string): string {
-  const segments = route
-    .replaceAll("\\", "/")
-    .split("/")
-    .filter(Boolean)
-    // App Router route groups and parallel slots do not appear in public URLs.
-    .filter((segment) => !(segment.startsWith("(") && segment.endsWith(")")))
-    .filter((segment) => !segment.startsWith("@"));
-
-  return segments.length === 0 ? "/" : `/${segments.join("/")}`;
+  return normalizeDeclaredRoute(route);
 }
 
 /** Removes duplicates and returns deterministic, alphabetically sorted routes. */
@@ -46,10 +40,14 @@ async function findFiles(projectPath: string, patterns: string[]): Promise<strin
 
 /** Discovers routes from both supported Next.js router conventions. */
 async function crawlNext(projectPath: string): Promise<string[]> {
-  const [appFiles, pageFiles] = await Promise.all([
+  const [appFiles, appRouteFiles, pageFiles] = await Promise.all([
     findFiles(projectPath, [
       `app/**/page.${SOURCE_EXTENSIONS}`,
       `src/app/**/page.${SOURCE_EXTENSIONS}`,
+    ]),
+    findFiles(projectPath, [
+      `app/**/route.${SOURCE_EXTENSIONS}`,
+      `src/app/**/route.${SOURCE_EXTENSIONS}`,
     ]),
     findFiles(projectPath, [
       `pages/**/*.${SOURCE_EXTENSIONS}`,
@@ -62,30 +60,33 @@ async function crawlNext(projectPath: string): Promise<string[]> {
     return relative.replace(/(?:^|\/)page\.[^.]+$/, "");
   });
 
+  const appApiRoutes = appRouteFiles.map((file) => {
+    const relative = toPosixPath(file).replace(/^(?:src\/)?app\//, "");
+    return relative.replace(/(?:^|\/)route\.[^.]+$/, "");
+  });
+
   const pageRoutes = pageFiles
     .map(toPosixPath)
     .map((file) => file.replace(/^(?:src\/)?pages\//, ""))
-    // API endpoints and Next.js special files are not browser pages.
-    .filter((file) => !file.startsWith("api/") && !file.startsWith("_api/"))
     .filter((file) => !file.split("/").at(-1)?.startsWith("_"))
     .map((file) => file.replace(/\.[^.]+$/, "").replace(/(?:^|\/)index$/, ""));
 
-  return [...appRoutes, ...pageRoutes];
+  return [...appRoutes, ...appApiRoutes, ...pageRoutes];
 }
 
 /** Extracts literal route paths used by common client-side router configs. */
-function extractDeclaredRoutes(source: string): string[] {
-  const routes: string[] = [];
+function extractRouteCandidates(source: string): string[] {
+  const routes: string[] = extractDeclaredRoutes(source);
   const patterns = [
-    /<Route\b[^>]*\bpath\s*=\s*["']([^"']+)["']/g,
-    /\bpath\s*:\s*["']([^"']*)["']/g,
+    /\brouterLink\s*:\s*["']([^"']*)["']/g,
+    /<[Rr]outer-?[Ll]ink\b[^>]*\bto\s*=\s*["']([^"']+)["']/g,
   ];
 
   for (const pattern of patterns) {
     for (const match of source.matchAll(pattern)) {
       const candidate = match[1];
       if (candidate !== undefined && candidate !== "**" && !candidate.includes("*")) {
-        routes.push(candidate || "/");
+        routes.push(normalizeRoutePath(candidate));
       }
     }
   }
@@ -94,16 +95,17 @@ function extractDeclaredRoutes(source: string): string[] {
 }
 
 /** Provides basic discovery for React Router, Vite, Angular, and Vue projects. */
-async function crawlDeclaredRoutes(projectPath: string): Promise<string[]> {
+async function crawlDeclaredRoutes(projectPath: string, declarationsOnly = false): Promise<string[]> {
   const files = await findFiles(projectPath, [
     `src/**/*.${SOURCE_EXTENSIONS}`,
     `app/**/*.${SOURCE_EXTENSIONS}`,
+    `projects/**/*.${SOURCE_EXTENSIONS}`,
   ]);
   const sources = await Promise.all(
     files.map((file) => fs.readFile(path.join(projectPath, file), "utf8"))
   );
 
-  return sources.flatMap(extractDeclaredRoutes);
+  return sources.flatMap(declarationsOnly ? extractDeclaredRoutes : extractRouteCandidates);
 }
 
 /** Discovers file-based pages used by Nuxt and Astro. */
@@ -119,15 +121,239 @@ async function crawlFileBasedPages(projectPath: string): Promise<string[]> {
     .map((file) => file.replace(/\.[^.]+$/, "").replace(/(?:^|\/)index$/, ""));
 }
 
+/** Discovers Nitro server API endpoints used by Nuxt. */
+async function crawlNitroRoutes(projectPath: string): Promise<string[]> {
+  const [apiFiles, routeFiles] = await Promise.all([
+    findFiles(projectPath, [
+      `server/api/**/*.${SOURCE_EXTENSIONS}`,
+      `src/server/api/**/*.${SOURCE_EXTENSIONS}`,
+    ]),
+    findFiles(projectPath, [
+      `server/routes/**/*.${SOURCE_EXTENSIONS}`,
+      `src/server/routes/**/*.${SOURCE_EXTENSIONS}`,
+    ]),
+  ]);
+
+  const apiRoutes = apiFiles.map((file) => {
+    let rel = toPosixPath(file).replace(/^(?:src\/)?server\/api\//, "");
+    rel = rel.replace(/\.(?:get|post|put|delete|patch|options|head|connect|trace)\.[^.]+$/, "");
+    rel = rel.replace(/\.[^.]+$/, "");
+    rel = rel.replace(/(?:^|\/)index$/, "");
+    return rel ? `/api/${rel}` : "/api";
+  });
+
+  const customRoutes = routeFiles.map((file) => {
+    let rel = toPosixPath(file).replace(/^(?:src\/)?server\/routes\//, "");
+    rel = rel.replace(/\.(?:get|post|put|delete|patch|options|head|connect|trace)\.[^.]+$/, "");
+    rel = rel.replace(/\.[^.]+$/, "");
+    rel = rel.replace(/(?:^|\/)index$/, "");
+    return rel ? (rel.startsWith("/") ? rel : `/${rel}`) : "/";
+  });
+
+  return [...apiRoutes, ...customRoutes];
+}
+
+/** Discovers both file-based pages and Nitro API routes for Nuxt. */
+async function crawlNuxt(projectPath: string): Promise<string[]> {
+  const [pages, nitroRoutes] = await Promise.all([
+    crawlFileBasedPages(projectPath),
+    crawlNitroRoutes(projectPath),
+  ]);
+  return [...pages, ...nitroRoutes];
+}
+
+/** Discovers Express routes statically from app.METHOD, router.METHOD, and mounted routers. */
+export async function crawlExpressRoutes(projectPath: string): Promise<string[]> {
+  const files = await findFiles(projectPath, [
+    `src/**/*.${SOURCE_EXTENSIONS}`,
+    `app/**/*.${SOURCE_EXTENSIONS}`,
+    `routes/**/*.${SOURCE_EXTENSIONS}`,
+    `controllers/**/*.${SOURCE_EXTENSIONS}`,
+    `*.${SOURCE_EXTENSIONS}`,
+  ]);
+
+  const fileContents = await Promise.all(
+    files.map(async (file) => ({
+      file,
+      content: await fs.readFile(path.join(projectPath, file), "utf8").catch(() => ""),
+    }))
+  );
+
+  const directRoutes: { method: string; path: string }[] = [];
+  const routerRoutes = new Map<string, { method: string; path: string }[]>();
+  const mounts: { prefix: string; targetVar: string }[] = [];
+
+  for (const { content } of fileContents) {
+    const routeRegex = /\b([a-zA-Z_$][\w$]*)\.(get|post|put|patch|delete|head|options|all)\s*\(\s*["']([^"']+)["']/gi;
+    for (const match of content.matchAll(routeRegex)) {
+      const varName = match[1]!;
+      const method = match[2]!.toUpperCase();
+      const rawPath = match[3]!;
+      
+      const methods = method === "ALL" 
+        ? ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+        : [method];
+
+      for (const m of methods) {
+        if (varName === "app" || varName === "server" || varName === "express") {
+          directRoutes.push({ method: m, path: rawPath });
+        } else {
+          if (!routerRoutes.has(varName)) {
+            routerRoutes.set(varName, []);
+          }
+          routerRoutes.get(varName)!.push({ method: m, path: rawPath });
+        }
+      }
+    }
+
+    const mountRegex = /\b([a-zA-Z_$][\w$]*)\.use\s*\(\s*["']([^"']+)["']\s*,\s*([a-zA-Z_$][\w$]*)\b/gi;
+    for (const match of content.matchAll(mountRegex)) {
+      const prefix = match[2]!;
+      const targetVar = match[3]!;
+      mounts.push({ prefix, targetVar });
+    }
+  }
+
+  const discovered = new Set<string>();
+
+  for (const r of directRoutes) {
+    const normPath = normalizeDeclaredRoute(r.path);
+    discovered.add(`${r.method} ${normPath}`);
+  }
+
+  for (const mount of mounts) {
+    const rList = routerRoutes.get(mount.targetVar) || [];
+    for (const r of rList) {
+      const combined = `${mount.prefix.replace(/\/$/, "")}${r.path.startsWith("/") ? r.path : `/${r.path}`}`;
+      const normPath = normalizeDeclaredRoute(combined);
+      discovered.add(`${r.method} ${normPath}`);
+    }
+  }
+
+  for (const rList of routerRoutes.values()) {
+    for (const r of rList) {
+      const normPath = normalizeDeclaredRoute(r.path);
+      discovered.add(`${r.method} ${normPath}`);
+    }
+  }
+
+  return [...discovered];
+}
+
+/** Discovers static HTML pages in an HTML project. */
+async function crawlHtmlPages(projectPath: string): Promise<string[]> {
+  const files = await findFiles(projectPath, ["**/*.html"]);
+  const routes: string[] = [];
+
+  for (const file of files.map(toPosixPath)) {
+    if (
+      file.startsWith("node_modules/") ||
+      file.startsWith("reports/") ||
+      file.startsWith("qa-reports/") ||
+      file.startsWith("history/") ||
+      file.startsWith("artifacts/") ||
+      file.startsWith("dist/") ||
+      file.startsWith("build/") ||
+      file.startsWith("coverage/") ||
+      file.endsWith("report.html")
+    ) {
+      continue;
+    }
+
+    const rel = file.replace(/^(?:public|static)\//, "");
+    if (rel === "index.html") {
+      routes.push("/");
+    } else {
+      const norm = rel.startsWith("/") ? rel : `/${rel}`;
+      routes.push(norm);
+    }
+  }
+
+  return routes;
+}
+
+/** Discovers Laravel API and web routes using php artisan route:list --json or route file parsing fallback. */
+export async function crawlLaravelRoutes(projectPath: string): Promise<string[]> {
+  const routes = new Set<string>();
+
+  // 1. Try php artisan route:list --json
+  try {
+    const res = await runCommand("php", ["artisan", "route:list", "--json"], projectPath);
+    if (res.success && res.stdout) {
+      const parsed = JSON.parse(res.stdout);
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (!item || !item.uri) continue;
+          const rawUri = String(item.uri);
+          const cleanPath = rawUri.startsWith("/") ? rawUri : `/${rawUri}`;
+          const methodStr = String(item.method || "GET").toUpperCase();
+          const methods = methodStr.split("|").filter((m) => m !== "HEAD");
+          for (const m of methods) {
+            routes.add(`${m} ${normalizeDeclaredRoute(cleanPath)}`);
+          }
+        }
+      }
+    }
+  } catch {
+    // Fall back to static route file scanning
+  }
+
+  // 2. Fallback: Parse routes/*.php if artisan didn't yield routes
+  if (routes.size === 0) {
+    const routeFiles = await findFiles(projectPath, [
+      "routes/**/*.php",
+      "app/Providers/RouteServiceProvider.php",
+    ]);
+
+    for (const file of routeFiles) {
+      const fullPath = path.join(projectPath, file);
+      const content = await fs.readFile(fullPath, "utf8").catch(() => "");
+      if (!content) continue;
+
+      const isApiFile = file.includes("api");
+      const prefix = isApiFile ? "/api" : "";
+
+      const routeRegex = /Route::(get|post|put|patch|delete|any|options)\s*\(\s*["']([^"']+)["']/gi;
+      for (const match of content.matchAll(routeRegex)) {
+        const method = match[1]!.toUpperCase();
+        const rawUri = match[2]!;
+        const fullUri = rawUri.startsWith("/") ? rawUri : `/${rawUri}`;
+        const combined = isApiFile && !fullUri.startsWith("/api") ? `${prefix}${fullUri}` : fullUri;
+        const norm = normalizeDeclaredRoute(combined);
+        const methods = method === "ANY" ? ["GET", "POST", "PUT", "PATCH", "DELETE"] : [method];
+        for (const m of methods) {
+          routes.add(`${m} ${norm}`);
+        }
+      }
+
+      const resourceRegex = /Route::(?:apiResource|resource)\s*\(\s*["']([^"']+)["']/gi;
+      for (const match of content.matchAll(resourceRegex)) {
+        const resName = match[1]!;
+        const baseUri = isApiFile && !resName.startsWith("api/") ? `/api/${resName}` : `/${resName}`;
+        routes.add(`GET ${normalizeDeclaredRoute(baseUri)}`);
+        routes.add(`POST ${normalizeDeclaredRoute(baseUri)}`);
+        routes.add(`GET ${normalizeDeclaredRoute(`${baseUri}/{id}`)}`);
+        routes.add(`PUT ${normalizeDeclaredRoute(`${baseUri}/{id}`)}`);
+        routes.add(`DELETE ${normalizeDeclaredRoute(`${baseUri}/{id}`)}`);
+      }
+    }
+  }
+
+  return [...routes];
+}
+
 const STRATEGIES: Readonly<Record<string, CrawlerStrategy>> = {
+  HTML: crawlHtmlPages,
   "Next.js": crawlNext,
   React: crawlDeclaredRoutes,
   "React + Vite": crawlDeclaredRoutes,
   Vite: crawlDeclaredRoutes,
   Angular: crawlDeclaredRoutes,
   Vue: crawlDeclaredRoutes,
-  Nuxt: crawlFileBasedPages,
+  Nuxt: crawlNuxt,
   Astro: crawlFileBasedPages,
+  Express: crawlExpressRoutes,
+  Laravel: crawlLaravelRoutes,
 };
 
 /**
@@ -135,17 +361,66 @@ const STRATEGIES: Readonly<Record<string, CrawlerStrategy>> = {
  * Dynamic segments remain placeholders because generating fake data belongs to
  * future test configuration, not route discovery.
  */
-export async function discoverRoutes(projectPath: string): Promise<{ framework: string; routes: string[] }> {
+export async function discoverRoutes(projectPath: string): Promise<{ framework: string; routes: string[]; fallbackRoutes?: string[] }> {
   const canonicalPath = await fs.realpath(path.resolve(projectPath));
   const detection = detectProjectFramework(canonicalPath);
   const framework = detection.framework;
   const detectedProjectPath = detection.projectPath;
   const strategy = STRATEGIES[framework];
 
+  const discovered = strategy ? finalizeRoutes(await strategy(detectedProjectPath)) : [];
+  const fallbackRoutes: string[] = discovered.filter(route => route === "/*" || route === "/**");
   return {
     framework,
-    routes: strategy ? finalizeRoutes(await strategy(detectedProjectPath)) : [],
+    routes: discovered.filter(route => !fallbackRoutes.includes(route)),
+    fallbackRoutes,
   };
+}
+
+/** Reuse framework discovery without accepting link destinations as proof a route exists. */
+export async function discoverDeclaredApplicationRoutes(projectPath: string): Promise<string[]> {
+  const detection = detectProjectFramework(projectPath);
+  const root = detection.projectPath;
+  if (detection.framework === "HTML") {
+    const rawHtmlRoutes = await crawlHtmlPages(root);
+    const expanded: string[] = [];
+    for (const r of rawHtmlRoutes) {
+      expanded.push(r);
+      if (r.endsWith(".html")) {
+        expanded.push(r.slice(0, -5));
+      }
+    }
+    // Native Node HTTP applications often declare literal pathname branches.
+    const serverFiles = await findFiles(root, ["*.js", "*.mjs", "*.cjs"]);
+    for (const file of serverFiles) {
+      const content = await fs.readFile(path.join(root, file), "utf8").catch(() => "");
+      if (!/createServer\s*\(/.test(content)) continue;
+      for (const match of content.matchAll(/\bpathname\s*===\s*["'](\/[^"']*)["']/g)) expanded.push(match[1]!);
+    }
+    return finalizeRoutes(expanded);
+  }
+  if (detection.framework === "Next.js") return finalizeRoutes(await crawlNext(root));
+  if (detection.framework === "Nuxt") return finalizeRoutes(await crawlNuxt(root));
+  if (detection.framework === "Astro") return finalizeRoutes(await crawlFileBasedPages(root));
+  if (detection.framework === "Express") return finalizeRoutes(await crawlExpressRoutes(root));
+  if (detection.framework === "Laravel") return finalizeRoutes(await crawlLaravelRoutes(root));
+  return finalizeRoutes(await crawlDeclaredRoutes(root, true));
+}
+
+export type RouteCategory = "static" | "dynamic" | "api" | "framework";
+
+export function classifyRoute(route: string): RouteCategory {
+  const norm = route.replace(/^[A-Z]+\s+/, "").trim();
+  if (norm.startsWith("/api/") || norm.startsWith("api/") || norm === "/api") {
+    return "api";
+  }
+  if (norm.startsWith("/_next/") || norm.startsWith("_next/")) {
+    return "framework";
+  }
+  if (/[\[\]:*]/.test(norm)) {
+    return "dynamic";
+  }
+  return "static";
 }
 
 export async function crawlProject(projectPath: string): Promise<string[]> {

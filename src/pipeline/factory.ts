@@ -7,6 +7,7 @@ import { FlutterPipeline } from "./flutter.pipeline.js";
 import { HtmlPipeline } from "./html.pipeline.js";
 import { LaravelPipeline } from "./laravel.pipeline.js";
 import { NextPipeline } from "./next.pipeline.js";
+import { NuxtPipeline } from "./nuxt.pipeline.js";
 import { PhpPipeline } from "./php.pipeline.js";
 import { ReactNativePipeline } from "./react-native.pipeline.js";
 import { ReactPipeline } from "./react.pipeline.js";
@@ -24,7 +25,7 @@ const PIPELINES: Readonly<Record<string, PipelineConstructor>> = {
   React: ReactPipeline,
   Vite: VitePipeline,
   Vue: VuePipeline,
-  Nuxt: VuePipeline,
+  Nuxt: NuxtPipeline,
   Angular: AngularPipeline,
   Astro: AstroPipeline,
   Laravel: LaravelPipeline,

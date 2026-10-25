@@ -41,4 +41,20 @@ export const accessibilitySuggestions: SuggestionMap = {
     suggestedFix: ['<a href="/pricing">View pricing</a>'],
     shortFix: "Add descriptive link text.",
   },
+  "html-has-lang": {
+    code: "html-has-lang",
+    title: "Html Has Lang",
+    problem: "The <html> element is missing a lang attribute.",
+    whyItMatters: "Screen readers use the lang attribute to pronounce text correctly.",
+    suggestedFix: ['Add a valid lang attribute to the root <html> element, such as <html lang="en">.'],
+    shortFix: 'Add a valid lang attribute to the root <html> element, such as <html lang="en">.',
+  },
+  "document-title": {
+    code: "document-title",
+    title: "Document Title",
+    problem: "The document is missing a title or has an empty title element.",
+    whyItMatters: "Search engines and screen readers require page titles to identify the page.",
+    suggestedFix: ["Define a unique page title using framework metadata or <title> tag."],
+    shortFix: "Define a unique page title using framework metadata, head configuration, or document <title>.",
+  },
 };

@@ -22,6 +22,18 @@ const examples = [
     description: "Run REST API endpoint tests defined in qa-check.config.json.",
   },
   {
+    command: "qa-check test",
+    description: "Run declarative E2E user flow tests defined in qa-check.config.json.",
+  },
+  {
+    command: "qa-check flow [file.yml|file.json|dir]",
+    description: "Run declarative E2E user flow tests from a JSON or YAML flow file.",
+  },
+  {
+    command: "qa-check compare [baseline.json] [current.json]",
+    description: "Compare two QA scan report JSON files and evaluate Quality Gate regressions.",
+  },
+  {
     command: "qa-check fix",
     description: "Automatically fix code quality issues, debug statements, and HTML accessibility/meta tags.",
   },
@@ -85,6 +97,8 @@ export function printHelp(): void {
   console.log("  --route /about               Include a route");
   console.log("  --ignore-route /admin        Exclude a route");
   console.log("  --max-routes 20              Limit audited routes");
+  console.log("  --lighthouse-route-timeout-ms 45000  Per-route Lighthouse budget (max 120000)");
+  console.log("  --lighthouse-budget-ms 90000       Total Lighthouse budget (max 600000)");
   console.log("  --output reports             Set report folder");
   console.log("  --no-html | --no-json        Skip report formats");
   console.log("  --markdown | --no-markdown   Enable or skip Markdown report");

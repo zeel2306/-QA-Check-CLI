@@ -1,0 +1,226 @@
+name: Lab 14 release readiness and security gate
+on:
+  push:
+    branches: [testing-branch, codex/lighthouse-13-5-experiment]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lab14:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node: ['22.19.0', '24']
+    runs-on: ${{ matrix.os }}
+    # Runs full source tests and four integration harnesses sequentially.
+    # Scanner/route timeouts and all harness assertions remain unchanged.
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Prepare owned temporary storage
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; import path from 'node:path'; import {resolveNpmCli} from './tests/integration/lab13-support.mjs'; fs.mkdirSync('test-reports/lab14-workflow',{recursive:true}); const tmp=fs.mkdtempSync(path.join(fs.realpathSync(process.env.RUNNER_TEMP),'qa-lab14-ci-')); const values={LAB14_TEMP:tmp,TMPDIR:tmp,TMP:tmp,TEMP:tmp,PLAYWRIGHT_BROWSERS_PATH:path.join(tmp,'browsers'),npm_execpath:await resolveNpmCli()}; fs.appendFileSync(process.env.GITHUB_ENV,Object.entries(values).map(([k,v])=>k+'='+v+'\n').join(''));"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install locked source dependencies
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          npm ci 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/npm-ci.log
+          exit $LASTEXITCODE
+      - name: Build the source to pack
+        id: build
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          npm run build 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/build.log
+          exit $LASTEXITCODE
+      - name: Install source Chromium and platform dependencies
+        id: browsers
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $browserArgs = @('install', 'chromium')
+          if ($IsLinux) { $browserArgs = @('install', '--with-deps', 'chromium') }
+          node node_modules/playwright/cli.js @browserArgs 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/browser-deps.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --input-type=module -e "import fs from 'node:fs'; import {chromium} from 'playwright'; import {supportsNodeVersion} from './dist/core/nodeVersion.js'; if(!supportsNodeVersion(process.versions.node,'>=22.19'))throw Error('Unsupported validation runtime'); fs.appendFileSync(process.env.GITHUB_ENV,'CHROME_PATH='+chromium.executablePath()+'\n'); fs.writeFileSync('test-reports/lab14-workflow/environment.json',JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,chrome:chromium.executablePath(),lighthouse:JSON.parse(fs.readFileSync('node_modules/lighthouse/package.json','utf8')).version},null,2));"
+          exit $LASTEXITCODE
+      - name: Run full source tests
+        id: source_tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browsers.outcome == 'success' }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          npm test 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/source-tests.log
+          exit $LASTEXITCODE
+      - name: Test release security policy
+        id: policy
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browsers.outcome == 'success' }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          node --test tests/integration/release-security.test.mjs 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/security-policy.log
+          exit $LASTEXITCODE
+      - name: Lab 11 clean, regression and recovery
+        id: lab11
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browsers.outcome == 'success' }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          node --test tests/integration/vite-readiness.test.mjs 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/vite-readiness.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/integration/lab11-cicd.mjs 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/lab11.log
+          exit $LASTEXITCODE
+      - name: Lab 12 packed clean and defect scenarios
+        id: lab12
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browsers.outcome == 'success' }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          node tests/integration/lab12-package.mjs 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/lab12.log
+          exit $LASTEXITCODE
+      - name: Lab 13 clean, defect and recovery across platform paths
+        id: lab13
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browsers.outcome == 'success' }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          node tests/integration/lab13-platform.mjs 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/lab13.log
+          exit $LASTEXITCODE
+      - name: Test installed tarball release readiness
+        id: lab14
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.browsers.outcome == 'success' }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          node tests/integration/lab14-release.mjs 2>&1 | Tee-Object -FilePath test-reports/lab14-workflow/harness.log
+          exit $LASTEXITCODE
+      - name: Summarize functional and security gates separately
+        if: always()
+        env:
+          VALIDATION_OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          $outcomes = $env:VALIDATION_OUTCOMES | ConvertFrom-Json
+          $required = @('build', 'browsers', 'source_tests', 'policy', 'lab11', 'lab12', 'lab13', 'lab14')
+          $complete = $true
+          foreach ($id in $required) {
+            $status = $outcomes.$id.outcome
+            if ($status -ne 'success') { $complete = $false }
+            "$id outcome: $status" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          if (!$complete) { 'Overall validation: NO-GO; one or more required steps failed or did not execute.' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8 }
+          $platform = node -p process.platform
+          $resultPath = "test-reports/lab14-release/$platform/results.json"
+          if (Test-Path -LiteralPath $resultPath) {
+            $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+            @("Release recommendation: $($result.recommendation)", "Functional gate passed: $($result.functional.passed)", "Source security: $($result.security.source.status)", "Consumer security: $($result.security.consumer.status)", "Exit code: $($result.exitCode)") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          } else {
+            'BLOCKED: release evidence missing; inspect setup/build/harness logs.' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+      - name: Clean owned temporary processes and files
+        if: always()
+        run: |
+          if (!$env:LAB14_TEMP -or !(Test-Path -LiteralPath $env:LAB14_TEMP)) { exit 0 }
+          node --input-type=module -e "import fs from 'node:fs'; import path from 'node:path'; const p=fs.realpathSync(process.env.LAB14_TEMP); if(path.dirname(p)!==fs.realpathSync(process.env.RUNNER_TEMP)||!/^qa-lab14-ci-[a-zA-Z0-9]+$/.test(path.basename(p)))throw Error('Unsafe cleanup target');"
+          if ($LASTEXITCODE -ne 0) { throw 'Refusing unverified cleanup target' }
+          $ownedRoot = (Resolve-Path -LiteralPath $env:LAB14_TEMP).ProviderPath
+          $prefix = $ownedRoot + [IO.Path]::DirectorySeparatorChar
+          if ($IsWindows) {
+            $owned = Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.IndexOf($prefix,[StringComparison]::OrdinalIgnoreCase) -ge 0 }
+            foreach ($process in $owned) {
+              $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($process.ProcessId)"
+              if ($current.CommandLine -and $current.CommandLine.IndexOf($prefix,[StringComparison]::OrdinalIgnoreCase) -ge 0) { Stop-Process -Id $current.ProcessId -Force -ErrorAction SilentlyContinue }
+            }
+          } else {
+            $lines = & ps -axo 'pid=,command='
+            foreach ($line in $lines) {
+              if ($line -match '^\s*(\d+)\s+(.*)$') {
+                $ownedPid = [int]$Matches[1]
+                $command = $Matches[2]
+                if ($ownedPid -ne $PID -and $command.Contains($prefix)) {
+                  $current = (& ps -p $ownedPid -o 'command=') -join "`n"
+                  if ($current.Contains($prefix)) { Stop-Process -Id $ownedPid -Force -ErrorAction SilentlyContinue }
+                }
+              }
+            }
+          }
+          node --input-type=module -e "import fs from 'node:fs'; import path from 'node:path'; const p=fs.realpathSync(process.env.LAB14_TEMP); if(path.dirname(p)!==fs.realpathSync(process.env.RUNNER_TEMP)||!/^qa-lab14-ci-[a-zA-Z0-9]+$/.test(path.basename(p)))throw Error('Unsafe cleanup target'); fs.rmSync(p,{recursive:true,force:true,maxRetries:5,retryDelay:500});"
+          exit $LASTEXITCODE
+      - name: Upload platform-specific evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab14-release-${{ matrix.os }}-node-${{ matrix.node }}
+          path: |
+            test-reports/lab11-cicd/
+            test-reports/lab12-package/
+            test-reports/lab13-platform/
+            test-reports/lab14-release/
+            test-reports/lab14-workflow/
+          if-no-files-found: error
+          retention-days: 14
+  runtime-compatibility:
+    name: Packed runtime compatibility (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      # Node 20 is used only as an explicit rejection test, never for build/scan validation.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Record unsupported runtime executable
+        id: node20
+        run: node --input-type=module -e "import fs from 'node:fs'; import {resolveNpmCli} from './tests/integration/lab13-support.mjs'; fs.appendFileSync(process.env.GITHUB_OUTPUT,'executable='+process.execPath+'\n'+'npm_cli='+await resolveNpmCli()+'\n');"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - name: Record minimum supported runtime executable
+        id: node22
+        run: node --input-type=module -e "import fs from 'node:fs'; fs.appendFileSync(process.env.GITHUB_OUTPUT,'executable='+process.execPath+'\n');"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install and build on supported Node 24
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          exit $LASTEXITCODE
+      - name: Verify external packed runtime contracts
+        env:
+          NODE20_EXECUTABLE: ${{ steps.node20.outputs.executable }}
+          NODE22_EXECUTABLE: ${{ steps.node22.outputs.executable }}
+          NODE20_NPMCLI: ${{ steps.node20.outputs.npm_cli }}
+        run: |
+          New-Item -ItemType Directory -Path test-reports/lighthouse13-runtime -Force | Out-Null
+          $PSNativeCommandUseErrorActionPreference = $false
+          node --test tests/integration/package-isolation.test.mjs 2>&1 | Tee-Object -FilePath test-reports/lighthouse13-runtime/isolation-tests.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Use Node 20's compatible npm for this negative test so rejection
+          # comes from QA Check's engine, not a newer npm's own Node minimum.
+          # The main release matrix independently validates each default npm.
+          $env:npm_execpath = $env:NODE20_NPMCLI
+          if (!(Test-Path -LiteralPath $env:npm_execpath -PathType Leaf)) { throw 'Missing compatible npm CLI' }
+          $node24 = node -p process.execPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/integration/lighthouse13-runtime.mjs $env:NODE22_EXECUTABLE $node24 $env:NODE20_EXECUTABLE
+          exit $LASTEXITCODE
+      - name: Upload runtime compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab14-runtime-${{ matrix.os }}
+          path: test-reports/lighthouse13-runtime/
+          if-no-files-found: error
+          retention-days: 14

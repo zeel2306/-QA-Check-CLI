@@ -15,10 +15,38 @@ Detect the framework → Select the correct QA pipeline → Generate a beautiful
 QA Check CLI is actively being developed as a framework-aware testing and QA
 reporting tool for modern web projects.
 
-The current stable npm release is `1.1.3`.
+This checkout prepares the **proposed `qa-check-cli@2.0.0` release**. It has not
+been published by this release-preparation work. The previous repository package
+version was `1.3.0`.
 
-Version `1.1.3` focuses on turning QA Check CLI into a complete reporting
-workflow:
+### Breaking change: Node.js 20 is no longer supported
+
+Version 2.0.0 requires **Node.js >=22.19**. Node 20 and Node 22 versions earlier
+than 22.19 are rejected before application initialization. Node 22.19+ and Node
+24 have been validated on Windows, Ubuntu and macOS for the Lighthouse migration.
+
+Upgrade your local runtime and CI runners before upgrading QA Check CLI. For
+GitHub Actions, use `actions/setup-node` with `node-version: '22.19.0'` or a
+validated Node 24 version. `npm install --engine-strict` also rejects an
+unsupported runtime at installation time. Users who must retain Node 20 should
+not upgrade to v2; the older dependency tree had known security findings, so
+remaining on it is not a security remediation.
+
+The proposed release migrates to **Lighthouse 13.5**, replaces the vulnerable
+glob dependency chain with `tinyglobby`, and removes vulnerable browser-management
+and telemetry dependency paths through the Lighthouse upgrade. Audit results are
+time-specific: consult `docs/v2-release-readiness.md` for the fresh source and
+packed-consumer results. No audit findings are suppressed and the release security
+gate remains strict.
+
+Lighthouse category scores can change across engine versions. Review a new
+baseline before adopting it; do not compare changed scoring models as identical.
+Existing server-response `TTFB` semantics are preserved; `navigationTTFB`, metric
+provenance and Lighthouse version are available as additional report evidence.
+
+Proposed release notes: `docs/releases/v2.0.0.md`. Release history: `CHANGELOG.md`.
+
+The reporting workflow includes:
 
 - Professional dark HTML dashboard
 - HTML, JSON, Markdown, and PDF report generation
@@ -316,7 +344,7 @@ QA Check CLI includes a ready-to-use GitHub Actions workflow at:
 
 The workflow runs on push, pull request, and manual workflow dispatch.
 
-It uses Node.js 20, installs project dependencies, runs QA Check in CI mode,
+It uses Node.js 22.19 or newer, installs project dependencies, runs QA Check in CI mode,
 generates HTML, JSON, PDF, and screenshot reports, then uploads them as
 downloadable workflow artifacts.
 
@@ -602,7 +630,7 @@ Overall Score
 
 # 📋 Requirements
 
-- Node.js 20+
+- Node.js >=22.19 (Node 20 and earlier Node 22 versions are unsupported)
 - Google Chrome (for Lighthouse)
 - npm
 

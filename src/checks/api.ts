@@ -1,4 +1,5 @@
 import type { Check, CheckResult } from "../types/result.js";
+import { matchesDeclaredRoute } from "../utils/routes.js";
 
 export interface ApiTestCase {
   name: string;
@@ -17,7 +18,7 @@ export interface ApiTestResultItem {
   name: string;
   method: string;
   url: string;
-  status: "PASS" | "FAIL";
+  status: "PASS" | "FAIL" | "BLOCKED";
   httpStatus?: number;
   expectedStatus: number;
   responseTime: number;
@@ -32,6 +33,17 @@ export interface ApiCheckData {
   passed: number;
   failed: number;
   results: ApiTestResultItem[];
+  testedEndpointsCount?: number;
+  testedEndpoints?: string[];
+}
+
+/** A configured successful JSON read is a non-mutating identity witness for external targets. */
+export async function verifyApiTarget(testCase: ApiTestCase): Promise<void> {
+  const response = await fetch(resolveEnvVars(testCase.url), { headers: { Accept: "application/json", ...resolveDeepEnvVars(testCase.headers || {}) }, redirect: "manual", signal: AbortSignal.timeout(5000) });
+  if (response.status !== (testCase.expect?.status ?? 200)) throw new Error(`API readiness witness returned HTTP ${response.status}`);
+  if (!response.headers.get("content-type")?.includes("json")) throw new Error("API readiness witness returned HTML or a non-JSON application");
+  const json = await response.json();
+  if (!json || typeof json !== "object" || (testCase.expect?.requiredFields ?? []).some((field) => !(field in json))) throw new Error("API readiness witness does not match configured JSON contract");
 }
 
 function resolveEnvVars(value: string): string {
@@ -58,7 +70,7 @@ function resolveDeepEnvVars<T>(obj: T): T {
 export class ApiTestingCheck implements Check<ApiCheckData> {
   readonly name = "API Testing";
 
-  constructor(private readonly testCases: ApiTestCase[]) {}
+  constructor(private readonly testCases: ApiTestCase[], private readonly declaredRoutes: string[] = [], private readonly signal?: AbortSignal) {}
 
   async run(_projectPath: string): Promise<CheckResult<ApiCheckData>> {
     const started = performance.now();
@@ -83,8 +95,10 @@ export class ApiTestingCheck implements Check<ApiCheckData> {
     const results: ApiTestResultItem[] = [];
     let passed = 0;
     let failed = 0;
+    let blocked = 0;
 
     for (const testCase of this.testCases) {
+      this.signal?.throwIfAborted();
       const method = (testCase.method || "GET").toUpperCase();
       const targetUrl = resolveEnvVars(testCase.url);
       const expectedStatus = testCase.expect?.status ?? 200;
@@ -97,13 +111,16 @@ export class ApiTestingCheck implements Check<ApiCheckData> {
       let httpStatus: number | undefined;
       let responseTime = 0;
       let isPass = true;
+      let infrastructureFailure = false;
       const messages: string[] = [];
       const missingFields: string[] = [];
 
       try {
         const fetchOptions: RequestInit = {
           method,
-          headers,
+          headers: { Accept: "application/json", ...headers },
+          signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(this.signal ? [this.signal] : [])]),
+          redirect: "manual",
         };
 
         if (testCase.body && ["POST", "PUT", "PATCH"].includes(method)) {
@@ -126,16 +143,12 @@ export class ApiTestingCheck implements Check<ApiCheckData> {
         if (httpStatus !== expectedStatus) {
           isPass = false;
           messages.push(`Expected HTTP ${expectedStatus}, got ${httpStatus}`);
-        } else {
-          messages.push(`Status: ${httpStatus}`);
         }
 
         // 2. Validate Response Time
         if (expectedResponseTime && responseTime > expectedResponseTime) {
           isPass = false;
           messages.push(`Response time ${responseTime}ms exceeded limit (${expectedResponseTime}ms)`);
-        } else {
-          messages.push(`${responseTime}ms`);
         }
 
         // 3. Validate Required Fields in JSON
@@ -150,21 +163,29 @@ export class ApiTestingCheck implements Check<ApiCheckData> {
             if (missingFields.length > 0) {
               isPass = false;
               messages.push(`Missing required field(s): ${missingFields.join(", ")}`);
-            } else {
-              messages.push(`${requiredFields.length} field(s) verified`);
             }
           } catch {
             isPass = false;
             messages.push("Response was not valid JSON");
           }
         }
+
+        if (isPass) {
+          messages.push(`Status: ${httpStatus}`);
+          if (requiredFields.length > 0) {
+            messages.push(`${requiredFields.length} field(s) verified`);
+          }
+        }
       } catch (err) {
         responseTime = Math.round(performance.now() - reqStart);
         isPass = false;
+        infrastructureFailure = true;
         messages.push(`Request failed: ${err instanceof Error ? err.message : String(err)}`);
       }
 
-      if (isPass) {
+      if (infrastructureFailure) {
+        blocked += 1;
+      } else if (isPass) {
         passed += 1;
       } else {
         failed += 1;
@@ -174,7 +195,7 @@ export class ApiTestingCheck implements Check<ApiCheckData> {
         name: testCase.name,
         method,
         url: targetUrl,
-        status: isPass ? "PASS" : "FAIL",
+        status: infrastructureFailure ? "BLOCKED" : isPass ? "PASS" : "FAIL",
         httpStatus,
         expectedStatus,
         responseTime,
@@ -187,20 +208,33 @@ export class ApiTestingCheck implements Check<ApiCheckData> {
 
     const total = this.testCases.length;
     const score = total > 0 ? Math.round((passed / total) * 100) : 100;
-    const overallStatus = failed === 0 ? "PASS" : "FAIL";
+    const overallStatus = failed > 0 ? "FAIL" : blocked > 0 ? "BLOCKED" : "PASS";
+
+    const testedEndpointsSet = new Set(
+      results.map((r) => {
+        const pathOnly = r.url.replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0] || r.url;
+        const normPath = pathOnly.startsWith("/") ? pathOnly : `/${pathOnly}`;
+        const declared = this.declaredRoutes.find((route) => route.startsWith(`${r.method} `) && matchesDeclaredRoute(normPath, route));
+        return declared || `${r.method} ${normPath}`;
+      })
+    );
+    const testedEndpoints = [...testedEndpointsSet];
+    const testedEndpointsCount = testedEndpoints.length;
 
     return {
       name: this.name,
       category: "api",
       status: overallStatus,
       score,
-      message: `${passed}/${total} API test(s) passed`,
+      message: `${passed}/${total} API test(s) passed (${testedEndpointsCount} distinct endpoint(s) tested)${blocked ? `; ${blocked} blocked` : ""}`,
       duration: performance.now() - started,
       data: {
         total,
         passed,
         failed,
         results,
+        testedEndpointsCount,
+        testedEndpoints,
       },
     };
   }

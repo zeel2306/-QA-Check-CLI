@@ -1,0 +1,9 @@
+{
+  "profile": "ci",
+  "markdown": true,
+  "pdf": true,
+  "baselineComparison": true,
+  "api": [],
+  "lighthouseRouteTimeoutMs": 45000,
+  "lighthouseBudgetMs": 180000
+}

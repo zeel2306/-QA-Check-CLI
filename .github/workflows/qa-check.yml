@@ -2,13 +2,15 @@ name: QA Check
 
 on:
   push:
+    branches: [testing-branch, codex/lighthouse-13-5-experiment]
   pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
-      node_version:
-        description: "Node.js version"
+      audit_project:
+        description: "Optional web application directory inside the repository (never the CLI root)"
         required: false
-        default: "20"
+        default: ""
       profile:
         description: "QA profile"
         required: false
@@ -27,7 +29,6 @@ on:
           - profile
           - error
           - warning
-          - none
       min_score:
         description: "Override profile minimum score. Use profile to keep profile default."
         required: false
@@ -42,12 +43,13 @@ permissions:
   pull-requests: write
 
 env:
-  NODE_VERSION: ${{ github.event.inputs.node_version || '20' }}
+  NODE_VERSION: '22.19.0'
   QA_PROFILE: ${{ github.event.inputs.profile || 'ci' }}
   FAIL_ON: ${{ github.event.inputs.fail_on || 'profile' }}
   MIN_SCORE: ${{ github.event.inputs.min_score || 'profile' }}
   REPORT_DIR: ${{ github.event.inputs.report_dir || 'reports' }}
-  QA_CHECK_PACKAGE: qa-check-cli@latest
+  AUDIT_PROJECT: ${{ github.event.inputs.audit_project || '' }}
+  QA_AUDIT_REQUESTED: 'false'
 
 jobs:
   qa-check:
@@ -63,37 +65,96 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: npm
 
-      - name: Select QA project and report directory
+      - name: Validate application and report directories
+        id: directories
         shell: bash
         run: |
-          QA_PROJECT_DIR=.
-          if [ -f apps/web/package.json ]; then
-            QA_PROJECT_DIR=apps/web
-          fi
-          echo "QA_PROJECT_DIR=${QA_PROJECT_DIR}" >> "$GITHUB_ENV"
-          echo "QA_OUTPUT_DIR=${REPORT_DIR}" >> "$GITHUB_ENV"
-          echo "REPORT_DIR=${QA_PROJECT_DIR}/${REPORT_DIR}" >> "$GITHUB_ENV"
-          echo "QA project: ${QA_PROJECT_DIR}"
-          echo "Reports: ${QA_PROJECT_DIR}/${REPORT_DIR}"
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const root = fs.realpathSync(process.env.GITHUB_WORKSPACE);
+          if (!['report', 'ci', 'strict'].includes(process.env.QA_PROFILE)) throw new Error('Invalid QA profile');
+          if (!['profile', 'error', 'warning'].includes(process.env.FAIL_ON)) throw new Error('Invalid CI fail rule');
+          if (process.env.MIN_SCORE !== 'profile' && (process.env.MIN_SCORE.trim() === '' || !Number.isFinite(Number(process.env.MIN_SCORE)) || Number(process.env.MIN_SCORE) < 0 || Number(process.env.MIN_SCORE) > 100)) throw new Error('Invalid minimum score');
+          function inside(value, label) {
+            if (!value || /[\r\n\x00]/.test(value) || path.isAbsolute(value)) throw new Error(`${label} must be a repository-relative subdirectory`);
+            const resolved = path.resolve(root, value);
+            const relative = path.relative(root, resolved);
+            if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`${label} cannot be the repository root or outside it`);
+            return resolved;
+          }
+          const output = inside(process.env.REPORT_DIR, 'report_dir');
+          // Validate the existing ancestor before mkdir can follow a symlink.
+          let ancestor = output;
+          while (!fs.existsSync(ancestor)) ancestor = path.dirname(ancestor);
+          const realAncestor = fs.realpathSync(ancestor);
+          if (realAncestor !== root) inside(path.relative(root, realAncestor), 'report_dir');
+          fs.mkdirSync(output, { recursive: true });
+          // Resolve symlinks too: neither reports nor the audit may escape checkout.
+          inside(path.relative(root, fs.realpathSync(output)), 'report_dir');
+          const values = { REPORT_DIR: output, QA_OUTPUT_DIR: output };
+          if (process.env.AUDIT_PROJECT) {
+            const project = fs.realpathSync(inside(process.env.AUDIT_PROJECT, 'audit_project'));
+            inside(path.relative(root, project), 'audit_project');
+            if (!fs.statSync(project).isDirectory()) throw new Error('audit_project must be a directory');
+            values.QA_PROJECT_DIR = project;
+            values.QA_AUDIT_REQUESTED = 'true';
+          }
+          fs.appendFileSync(process.env.GITHUB_ENV, Object.entries(values).map(([key, value]) => `${key}=${value}\n`).join(''));
+          console.log(values.QA_PROJECT_DIR ? `Explicit web audit: ${values.QA_PROJECT_DIR}` : 'No web audit requested. Validating CLI source only.');
+          NODE
 
-      - name: Install project dependencies
+      - name: Install CLI dependencies
+        id: install
         shell: bash
         run: |
-          cd "${QA_PROJECT_DIR}"
-          if [ -f package-lock.json ]; then
-            npm ci
-          elif [ -f package.json ]; then
-            npm install
-          else
-            echo "No package.json found. Skipping project dependency installation."
-          fi
+          npm ci
 
       - name: Install browser dependencies
+        id: browsers
         shell: bash
         run: |
           echo "Installing Playwright Chromium for browser-based QA checks."
-          npx -y playwright install --with-deps chromium
+          node ./node_modules/playwright/cli.js install --with-deps chromium
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import { chromium } from 'playwright';
+          const chrome = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', chromium.executablePath()].find(file => fs.existsSync(file));
+          if (!chrome) throw new Error('No Chrome/Chromium executable available for Lighthouse');
+          fs.appendFileSync(process.env.GITHUB_ENV, `CHROME_PATH=${chrome}\n`);
+          NODE
+
+      - name: Compile checked-out CLI source
+        id: build
+        shell: bash
+        run: npm run build 2>&1 | tee build-output.log
+
+      - name: Run complete CLI unit and integration suite
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee test-output.log
+          STATUS=("${PIPESTATUS[@]}")
+          EXIT_CODE=${STATUS[0]}
+          if [ "${EXIT_CODE}" -eq 0 ] && [ "${STATUS[1]}" -ne 0 ]; then EXIT_CODE=${STATUS[1]}; fi
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+          exit "${EXIT_CODE}"
+
+      - name: Validate checked-out CLI entrypoint
+        id: cli
+        shell: bash
+        run: node ./bin/qa-check.js --help 2>&1 | tee cli-help.log
+
+      - name: Install explicit web application dependencies
+        if: env.QA_AUDIT_REQUESTED == 'true'
+        shell: bash
+        run: |
+          if [ -f "${QA_PROJECT_DIR}/package.json" ]; then
+            npm ci --prefix "${QA_PROJECT_DIR}"
+          fi
 
       - name: Debug Environment
         shell: bash
@@ -111,8 +172,7 @@ jobs:
           ls -la
 
           echo ""
-          echo "QA Check package:"
-          echo "${QA_CHECK_PACKAGE}"
+          echo "QA Check source entrypoint: node ./bin/qa-check.js"
           echo "QA Profile:"
           echo "${QA_PROFILE}"
 
@@ -121,6 +181,7 @@ jobs:
 
       - name: Run QA Check CLI
         id: qa
+        if: env.QA_AUDIT_REQUESTED == 'true'
         shell: bash
         run: |
           set +e
@@ -131,15 +192,22 @@ jobs:
 
           if [ "${FAIL_ON}" != "profile" ]; then
             QA_ARGS+=(--fail-on "${FAIL_ON}")
+          elif [ "${QA_PROFILE}" = "strict" ]; then
+            QA_ARGS+=(--fail-on warning)
+          else
+            # Neither report mode nor an application's failOn=none may disable CI.
+            QA_ARGS+=(--fail-on error)
           fi
 
           if [ "${MIN_SCORE}" != "profile" ]; then
             QA_ARGS+=(--min-score "${MIN_SCORE}")
           fi
 
-          npx -y "${QA_CHECK_PACKAGE}" "${QA_ARGS[@]}" 2>&1 | tee qa-output.log
+          node ./bin/qa-check.js "${QA_ARGS[@]}" 2>&1 | tee qa-output.log
 
-          EXIT_CODE=${PIPESTATUS[0]}
+          STATUS=("${PIPESTATUS[@]}")
+          EXIT_CODE=${STATUS[0]}
+          if [ "${EXIT_CODE}" -eq 0 ] && [ "${STATUS[1]}" -ne 0 ]; then EXIT_CODE=${STATUS[1]}; fi
 
           echo ""
           echo "========== QA OUTPUT =========="
@@ -154,7 +222,7 @@ jobs:
 
       - name: Detect generated reports
         id: reports
-        if: always()
+        if: always() && steps.directories.outcome == 'success' && env.QA_AUDIT_REQUESTED == 'true'
         shell: bash
         run: |
           if [ -d "${REPORT_DIR}" ] && [ "$(find "${REPORT_DIR}" -type f | wc -l)" -gt 0 ]; then
@@ -166,7 +234,14 @@ jobs:
           fi
 
       - name: Write workflow summary
-        if: always() && steps.reports.outputs.exists == 'true'
+        if: always()
+        env:
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          TEST_EXIT_CODE: ${{ steps.tests.outputs.exit_code }}
+          CLI_OUTCOME: ${{ steps.cli.outcome }}
+          QA_EXIT_CODE: ${{ steps.qa.outputs.exit_code }}
         shell: bash
         run: |
           node - <<'NODE'
@@ -177,12 +252,27 @@ jobs:
           const summaryPath = process.env.GITHUB_STEP_SUMMARY;
           const reportPath = path.join(reportDir, "report.json");
 
-          if (!summaryPath || !fs.existsSync(reportPath)) {
-            process.exit(0);
+          if (!summaryPath) process.exit(1);
+          const source = [
+            '# QA Check CLI source validation', '',
+            `Node.js: ${process.version}`,
+            `Dependency installation: ${process.env.INSTALL_OUTCOME || 'not run'}`,
+            `Compilation: ${process.env.BUILD_OUTCOME || 'not run'}`,
+            `Automated tests: ${process.env.TEST_OUTCOME || 'not run'} (exit ${process.env.TEST_EXIT_CODE || 'not recorded'})`,
+            `Local CLI entrypoint: ${process.env.CLI_OUTCOME || 'not run'}`,
+            `Web audit: ${process.env.QA_AUDIT_REQUESTED === 'true' ? `requested (exit ${process.env.QA_EXIT_CODE || 'not recorded'})` : 'not requested; the CLI repository is not a web application'}`,
+            '',
+            'Lab 11 regression tests create temporary fixtures. The external full Vite lab and other local lab fixtures are not bundled; missing legacy fixture tests do not establish full-lab coverage.',
+          ];
+          if (fs.existsSync('test-output.log')) {
+            const totals = fs.readFileSync('test-output.log', 'utf8').split(/\r?\n/).filter(line => /^# (tests|pass|fail|cancelled|skipped|todo) \d+$/.test(line));
+            source.push('', '```text', ...totals, '```');
           }
+          fs.appendFileSync(summaryPath, `${source.join('\n')}\n\n`);
+          if (!fs.existsSync(reportPath) || process.env.QA_AUDIT_REQUESTED !== 'true') process.exit(0);
 
           const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-          const counts = { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, SKIPPED: 0 };
+          const counts = { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, PARTIAL: 0, TIMEOUT: 0, BLOCKED: 0, SKIPPED: 0, NOT_APPLICABLE: 0 };
 
           for (const result of report.results || []) {
             counts[result.status] = (counts[result.status] || 0) + 1;
@@ -195,11 +285,14 @@ jobs:
             `| --- | --- |`,
             `| Framework | ${report.framework || "Unknown"} |`,
             `| Pipeline | ${report.pipeline || "Unknown"} |`,
-            `| Overall Score | ${report.overallScore ?? 0}/100 |`,
+            `| Overall Score | ${report.overallScore ?? 'N/A'}/100 |`,
             `| PASS | ${counts.PASS} |`,
             `| WARNING | ${counts.WARNING} |`,
-            `| FAIL | ${counts.FAIL + counts.ERROR} |`,
+            `| FAIL | ${counts.FAIL} |`,
+            `| ERROR | ${counts.ERROR} |`,
+            `| PARTIAL / TIMEOUT / BLOCKED | ${counts.PARTIAL} / ${counts.TIMEOUT} / ${counts.BLOCKED} |`,
             `| SKIPPED | ${counts.SKIPPED} |`,
+            `| NOT APPLICABLE | ${counts.NOT_APPLICABLE} |`,
             "",
             "Reports were generated and uploaded when available.",
           ];
@@ -208,8 +301,13 @@ jobs:
           NODE
 
       - name: Comment on pull request
-        if: always() && github.event_name == 'pull_request' && steps.reports.outputs.exists == 'true'
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v7
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          TEST_EXIT_CODE: ${{ steps.tests.outputs.exit_code }}
+          CLI_OUTCOME: ${{ steps.cli.outcome }}
         with:
           script: |
             const fs = require("fs");
@@ -217,22 +315,23 @@ jobs:
             const marker = "<!-- qa-check-cli-report -->";
             const reportPath = path.join(process.env.REPORT_DIR || "reports", "report.json");
 
-            if (!fs.existsSync(reportPath)) {
-              return;
-            }
+            const report = process.env.QA_AUDIT_REQUESTED === 'true' && fs.existsSync(reportPath) ? JSON.parse(fs.readFileSync(reportPath, "utf8")) : null;
+            const counts = { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, PARTIAL: 0, TIMEOUT: 0, BLOCKED: 0, SKIPPED: 0, NOT_APPLICABLE: 0 };
 
-            const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-            const counts = { PASS: 0, WARNING: 0, FAIL: 0, ERROR: 0, SKIPPED: 0 };
-
-            for (const result of report.results || []) {
+            for (const result of report?.results || []) {
               counts[result.status] = (counts[result.status] || 0) + 1;
             }
 
             const body = [
               marker,
-              "## QA Check Report",
+              "## QA Check CLI source validation",
               "",
-              `**Score:** ${report.overallScore ?? 0}/100`,
+              `**Automated tests:** ${process.env.TEST_OUTCOME} (exit ${process.env.TEST_EXIT_CODE || 'not recorded'})`,
+              `**Compilation:** ${process.env.BUILD_OUTCOME}`,
+              `**Local CLI entrypoint:** ${process.env.CLI_OUTCOME}`,
+              "",
+              ...(report ? [
+              `**Score:** ${report.overallScore ?? 'N/A'}/100`,
               `**Framework:** ${report.framework || "Unknown"}`,
               `**Pipeline:** ${report.pipeline || "Unknown"}`,
               "",
@@ -240,10 +339,16 @@ jobs:
               "| --- | ---: |",
               `| PASS | ${counts.PASS} |`,
               `| WARNING | ${counts.WARNING} |`,
-              `| FAIL | ${counts.FAIL + counts.ERROR} |`,
+              `| FAIL | ${counts.FAIL} |`,
+              `| ERROR | ${counts.ERROR} |`,
+              `| PARTIAL / TIMEOUT / BLOCKED | ${counts.PARTIAL} / ${counts.TIMEOUT} / ${counts.BLOCKED} |`,
               `| SKIPPED | ${counts.SKIPPED} |`,
               "",
               "Download the uploaded `qa-check-reports` artifact to view HTML, JSON, PDF, and screenshots.",
+              ] : ['Web application audit was not requested or did not produce a report. No web quality score is claimed.']),
+              '',
+              'Download `qa-check-validation` for source validation logs and available test reports.',
+              'Full external lab fixtures are not bundled; their coverage is separate from the temporary-fixture regression tests.',
             ].join("\n");
 
             const { owner, repo } = context.repo;
@@ -254,7 +359,7 @@ jobs:
               issue_number,
               per_page: 100,
             });
-            const previous = comments.data.find((comment) => comment.body?.includes(marker));
+            const previous = comments.data.find((comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker));
 
             if (previous) {
               await github.rest.issues.updateComment({
@@ -286,15 +391,49 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Upload source validation logs and test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-check-validation
+          path: |
+            build-output.log
+            test-output.log
+            cli-help.log
+            qa-output.log
+            test-reports/**
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Fail workflow when QA threshold is not met
-        if: always() && steps.qa.outputs.exit_code != '0'
+        if: always()
         env:
           QA_EXIT_CODE: ${{ steps.qa.outputs.exit_code }}
+          TEST_EXIT_CODE: ${{ steps.tests.outputs.exit_code }}
+          DIRECTORIES_OUTCOME: ${{ steps.directories.outcome }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          BROWSERS_OUTCOME: ${{ steps.browsers.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          CLI_OUTCOME: ${{ steps.cli.outcome }}
         shell: bash
         run: |
           node --input-type=module - <<'NODE'
           import fs from 'node:fs';
           import path from 'node:path';
+
+          for (const step of ['DIRECTORIES', 'INSTALL', 'BROWSERS', 'BUILD', 'TEST', 'CLI']) {
+            if (process.env[`${step}_OUTCOME`] !== 'success') {
+              console.error(`${step.toLowerCase()} did not succeed (${process.env[`${step}_OUTCOME`] || 'not run'}). Available logs/reports were uploaded.`);
+              const testCode = Number(process.env.TEST_EXIT_CODE);
+              process.exit(step === 'TEST' && Number.isInteger(testCode) && testCode > 0 && testCode < 256 ? testCode : 1);
+            }
+          }
+          if (process.env.QA_AUDIT_REQUESTED !== 'true') {
+            console.log('CLI source validation succeeded. No web application audit was requested.');
+            process.exit(0);
+          }
+          if (process.env.QA_EXIT_CODE === '0') process.exit(0);
 
           const reportPath = path.join(process.env.REPORT_DIR || 'reports', 'report.json');
           if (!fs.existsSync(reportPath)) {
@@ -303,7 +442,7 @@ jobs:
             try {
               const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
               const failed = (report.results || []).filter((result) =>
-                result.status === 'FAIL' || result.status === 'ERROR'
+                ['FAIL', 'ERROR', 'PARTIAL', 'TIMEOUT', 'BLOCKED'].includes(result.status)
               );
               console.log(`Overall QA score: ${report.overallScore ?? 'unknown'}/100`);
               console.log(`Failed/error checks: ${failed.length}`);
@@ -316,9 +455,7 @@ jobs:
               console.log('report.json could not be read. Inspect the earlier QA step and downloaded artifacts.');
             }
           }
+          const qaCode = Number(process.env.QA_EXIT_CODE);
+          console.error(`Web QA failed or did not run; CLI exit code: ${process.env.QA_EXIT_CODE || 'not recorded'}.`);
+          process.exit(Number.isInteger(qaCode) && qaCode > 0 && qaCode < 256 ? qaCode : 1);
           NODE
-
-          echo "QA Check completed, reports were uploaded when available."
-          echo "Failing this workflow because --ci returned exit code ${QA_EXIT_CODE:-unknown}."
-          echo "This usually means one or more checks matched the configured --fail-on threshold (${FAIL_ON})."
-          exit "${QA_EXIT_CODE:-1}"
