@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveNpmCli } from './lab13-support.mjs';
 import { configureConsumerBrowser } from './package-browser.mjs';
+import { assertPlatformScore } from './platform-score-contract.mjs';
 
 const root = await fs.realpath(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'));
 const npm = await resolveNpmCli();
@@ -121,6 +122,7 @@ try {
   const pkg = path.join(consumer, 'node_modules/qa-check-cli');
   assert.equal(await fs.realpath(pkg), pkg, 'Installed package must not be a source symlink');
   const packageJson = JSON.parse(await fs.readFile(path.join(pkg, 'package.json'), 'utf8'));
+  const { calculateOverallScore } = await import(pathToFileURL(path.join(pkg, 'dist/core/report.js')).href);
   const bin = path.resolve(pkg, packageJson.bin['qa-check']);
   assert.ok(bin.startsWith(pkg + path.sep));
   assert.match(await fs.readFile(bin, 'utf8'), /^#!\/usr\/bin\/env node/);
@@ -175,13 +177,13 @@ try {
     assert.equal(r.code, scenario === 'defect' ? 2 : 0, r.text.slice(-3000));
     for (const file of ['index.html', 'report.json', 'report.md', 'report.pdf']) assert.ok((await fs.stat(path.join(dir, file))).size > 0, `Missing report ${file}`);
     const report = JSON.parse(await fs.readFile(path.join(dir, 'report.json'), 'utf8'));
-    const scoreEvidence = { scenario, expectedScore: scenario === 'defect' ? 96 : 100, actualScore: report.overallScore,
+    const scoreEvidence = { scenario, expectedDeterministicScore: scenario === 'defect' ? 96 : 100, actualScore: report.overallScore,
       scanners: report.results.map(({ name, status, score, message, data, metadata }) => ({ name, status, score, message, data, metadata })),
       resources: { freeMemory: os.freemem(), loadAverage: os.loadavg() }, chromePath: env.CHROME_PATH };
     await fs.writeFile(path.join(dir, 'score-diagnostics.json'), JSON.stringify(scoreEvidence, null, 2));
     assert.equal(report.framework, 'HTML'); assert.equal(report.currentQualityGate.confidence, 'FULL'); assert.equal(report.coverage.coveragePercent, 100);
     assert.equal(report.currentQualityGate.passed, scenario !== 'defect');
-    assert.equal(report.overallScore, scenario === 'defect' ? 96 : 100, `Platform score differs from fixture contract; inspect score-diagnostics.json. Scored checks: ${JSON.stringify(report.results.filter(r => typeof r.score === 'number').map(({ name, status, score }) => ({ name, status, score })))}`);
+    assertPlatformScore(report, scenario, calculateOverallScore);
     assert.equal(await fs.realpath(report.projectPath), html);
     assert.deepEqual(report.routes, ['/']);
     assert.equal((await fs.readFile(path.join(dir, 'report.pdf'))).subarray(0, 5).toString(), '%PDF-');
