@@ -15,14 +15,15 @@ Detect the framework → Select the correct QA pipeline → Generate a beautiful
 QA Check CLI is actively being developed as a framework-aware testing and QA
 reporting tool for modern web projects.
 
-This checkout prepares the **proposed `qa-check-cli@2.0.0` release**. It has not
-been published by this release-preparation work. The previous repository package
-version was `1.3.0`.
+**QA Check CLI v2.0.0 is publicly released** and published on
+[npm](https://www.npmjs.com/package/qa-check-cli/v/2.0.0). See the
+[GitHub Release v2.0.0](https://github.com/zeel2306/-QA-Check-CLI/releases/tag/v2.0.0)
+for release notes.
 
 ### Breaking change: Node.js 20 is no longer supported
 
-Version 2.0.0 requires **Node.js >=22.19**. Node 20 and Node 22 versions earlier
-than 22.19 are rejected before application initialization. Node 22.19+ and Node
+Version 2.0.0 requires **Node.js >=22.19.0**. Node 20 and Node 22 versions earlier
+than 22.19.0 are rejected before application initialization. Node 22.19.0+ and Node
 24 have been validated on Windows, Ubuntu and macOS for the Lighthouse migration.
 
 Upgrade your local runtime and CI runners before upgrading QA Check CLI. For
@@ -32,19 +33,19 @@ unsupported runtime at installation time. Users who must retain Node 20 should
 not upgrade to v2; the older dependency tree had known security findings, so
 remaining on it is not a security remediation.
 
-The proposed release migrates to **Lighthouse 13.5**, replaces the vulnerable
+Version 2.0.0 migrates to **Lighthouse 13.5**, replaces the vulnerable
 glob dependency chain with `tinyglobby`, and removes vulnerable browser-management
 and telemetry dependency paths through the Lighthouse upgrade. Audit results are
-time-specific: consult `docs/v2-release-readiness.md` for the fresh source and
-packed-consumer results. No audit findings are suppressed and the release security
-gate remains strict.
+time-specific: consult [the release-readiness record](docs/v2-release-readiness.md)
+for historical source and packed-consumer results from release preparation.
+No audit findings are suppressed and the release security gate remains strict.
 
 Lighthouse category scores can change across engine versions. Review a new
 baseline before adopting it; do not compare changed scoring models as identical.
 Existing server-response `TTFB` semantics are preserved; `navigationTTFB`, metric
 provenance and Lighthouse version are available as additional report evidence.
 
-Proposed release notes: `docs/releases/v2.0.0.md`. Release history: `CHANGELOG.md`.
+Release history: [CHANGELOG.md](CHANGELOG.md).
 
 The reporting workflow includes:
 
@@ -187,12 +188,8 @@ qa-check --version
 ```
 
 If `qa-check` is not recognized on Windows, the CLI is not available on your
-PATH yet. Install it globally first, or run it through `npx`:
-
-```bash
-npm install -g qa-check-cli
-qa-check --version
-```
+PATH yet. After the global installation above, check your PATH using the
+commands below, or run it through `npx`:
 
 ```bash
 npx qa-check-cli .
@@ -344,7 +341,7 @@ QA Check CLI includes a ready-to-use GitHub Actions workflow at:
 
 The workflow runs on push, pull request, and manual workflow dispatch.
 
-It uses Node.js 22.19 or newer, installs project dependencies, runs QA Check in CI mode,
+It uses Node.js 22.19.0 or newer, installs project dependencies, runs QA Check in CI mode,
 generates HTML, JSON, PDF, and screenshot reports, then uploads them as
 downloadable workflow artifacts.
 
@@ -426,7 +423,7 @@ The workflow supports manual configuration through workflow dispatch:
 Default values:
 
 ```yaml
-node_version: 20
+node_version: '22.19.0'
 profile: ci
 fail_on: profile
 min_score: profile
@@ -438,7 +435,7 @@ For push and pull request runs, edit the workflow `env` defaults in
 
 ```yaml
 env:
-  NODE_VERSION: 20
+  NODE_VERSION: '22.19.0'
   QA_PROFILE: ci
   FAIL_ON: profile
   MIN_SCORE: profile
@@ -505,7 +502,10 @@ uploaded before the workflow exits with the QA Check CLI exit code.
 
 # 📊 Sample Output
 
-```
+Illustrative sample only; this is not a measured v2.0.0 test result. Checks,
+page counts, and scores vary by project, configuration, and available tooling.
+
+```text
 QA CHECK
 
 Framework : Next.js
@@ -530,6 +530,11 @@ Overall Score
 ---
 
 # 🌍 Supported Frameworks
+
+Framework detection selects the applicable pipeline. Framework-specific checks
+depend on available tooling, installed dependencies, project scripts, and
+configuration; detection does not guarantee that every listed check can run.
+Browser-based checks also require a runnable web application.
 
 ### Frontend
 
@@ -630,7 +635,7 @@ Overall Score
 
 # 📋 Requirements
 
-- Node.js >=22.19 (Node 20 and earlier Node 22 versions are unsupported)
+- Node.js >=22.19.0 (Node 20 and earlier Node 22 versions are unsupported)
 - Google Chrome (for Lighthouse)
 - npm
 
