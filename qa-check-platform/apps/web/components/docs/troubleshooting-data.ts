@@ -1,0 +1,97 @@
+import type { TroubleshootingTopic } from "./types";
+
+export const troubleshootingTopics: TroubleshootingTopic[] = [
+  {
+    id: "installation-fails", title: "CLI installation fails", kind: "Environment",
+    symptoms: "npm install -g qa-check-cli exits before an executable is installed. npm's own output describes the failure; there is no QA Check-specific installation error code.",
+    causes: "An unsupported Node runtime, an inaccessible npm registry, or an npm global prefix that your account cannot write to.",
+    steps: ["Check the active Node and npm versions. CLI v2 requires Node >=22.19.0.", "Read the npm error before retrying. Check registry connectivity for a download failure, or inspect npm's prefix for a permission failure.", "If global installation is unsuitable, install qa-check-cli as a development dependency in the intended project and use npx. This updates that project's package files; review the change."],
+    command: "node --version\nnpm --version\nnpm config get prefix",
+    confirm: "Installation completes, then qa-check --version (global) or npx qa-check-cli --version (project-local) prints a version.", related: "/docs/installation#global-install", source: "package.json; README.md — Installation",
+  },
+  {
+    id: "unsupported-node", title: "Unsupported Node.js version", kind: "Environment",
+    symptoms: "QA Check CLI requires Node.js …; found … is printed before a command starts.",
+    causes: "The terminal resolves a Node version below 22.19.0, or an older executable remains first on PATH after an upgrade.",
+    steps: ["Install or select a Node runtime satisfying >=22.19.0. Node 20 and Node 22 versions earlier than 22.19.0 are unsupported.", "Open a new terminal and check node --version. On PowerShell, Get-Command node shows which executable is selected.", "Retry the CLI version command before attempting another audit."],
+    command: "node --version\nqa-check --version", confirm: "The version guard no longer appears and the CLI prints its installed version.", related: "/docs/installation#requirements", source: "src/core/nodeVersion.ts; src/tests/version.test.ts",
+  },
+  {
+    id: "command-not-found", title: "Command not recognized", kind: "Environment",
+    symptoms: "The shell cannot resolve qa-check. This is a shell/PATH problem, not a scanner result.",
+    causes: "The global installation has not completed, the npm executable directory is not on PATH, or a terminal predates a PATH update.",
+    steps: ["Confirm whether you installed globally or as a project dependency. Project-local installations use npx from that project.", "Restart the terminal after a global installation and inspect the npm prefix. On PowerShell use Get-Command qa-check to inspect resolution.", "Use npx qa-check-cli --version from the installed project to verify the package without relying on a global shim. Without a local installation, npx may prompt to download a package."],
+    command: "npm config get prefix\nnpx qa-check-cli --version", confirm: "The chosen invocation prints the CLI version and --help displays usage.", related: "/docs/installation#common-issues", source: "README.md — Installation; package.json bin",
+  },
+  {
+    id: "powershell-scripts", title: "PowerShell blocks an npm script shim", kind: "Environment",
+    symptoms: "PowerShell refuses to run an npm.ps1, npx.ps1, or qa-check.ps1 shim because script execution is restricted.",
+    causes: "PowerShell applies its execution policy to the selected .ps1 shim.",
+    steps: ["Use the npm-provided .cmd shims instead of changing execution policy.", "Check runtime and CLI versions in the same terminal. Use npx.cmd for a project-local installation.", "Run the intended audit only after command resolution works."],
+    command: "npm.cmd --version\nqa-check.cmd --version\n# Project-local alternative:\nnpx.cmd qa-check-cli --version", confirm: "The .cmd command runs without the script-policy error. No system security setting needs to change.", related: "/docs/installation#common-issues", source: "README.md — Windows PATH troubleshooting; Windows npm shim behavior",
+  },
+  {
+    id: "missing-chromium", title: "Playwright or Chromium is unavailable", kind: "Environment",
+    symptoms: "A browser check fails to launch, or the flow checker reports Playwright browser unavailable: … and returns SKIPPED.",
+    causes: "Playwright cannot locate its expected Chromium executable, its browser download is missing, or launch prerequisites are unavailable.",
+    steps: ["Read the launch error to distinguish a missing executable from a library, permission, or other launch failure.", "From an environment with the matching Playwright package available, install Chromium. Bare npx may otherwise resolve a different Playwright version.", "For Linux system-library problems, use the documented Playwright system-dependency installation where you are authorized to install those packages.", "Rerun the affected browser check. Doctor's package/path check is useful, but is not a browser launch test."],
+    command: "npx playwright install chromium\nqa-check doctor .", confirm: "The scanner or flow actually executes. SKIPPED or a successful doctor check alone is not confirmation.", related: "/docs/installation#browser-setup", source: "src/checks/e2e.ts; src/core/doctor.ts; src/core/init.ts",
+  },
+  {
+    id: "chrome-launch", title: "Chrome launch fails", kind: "Environment",
+    symptoms: "Lighthouse reports Chrome launch failed: …, possibly with Chrome launch timed out.",
+    causes: "Lighthouse cannot start an available Chrome executable, or its launch budget expires. This is distinct from a missing Playwright Chromium installation.",
+    steps: ["Read the complete launch message and check that Google Chrome is installed and can launch normally under your account.", "Check resources and any concrete permission/path error. Do not disable security protections or kill unrelated processes.", "Retry a small route selection with a realistic Lighthouse total budget. Keep the original failure evidence for comparison."],
+    command: "qa-check . --profile report --route / --lighthouse-budget-ms 120000", confirm: "Lighthouse records completed page evidence without the launch error. Review page counts and status rather than only the process exit code.", related: "/docs/errors#browser-automation", source: "src/checks/lighthouse.ts; src/core/lighthouseChrome.ts",
+  },
+  {
+    id: "lighthouse-fails", title: "Lighthouse runs but cannot produce evidence", kind: "Scan evidence",
+    symptoms: "Messages include Lighthouse runtime error …, Lighthouse returned empty report, Lighthouse completed 0/… selected page(s), or Performance score unavailable (NO_FCP).",
+    causes: "A navigation/rendering problem, a Lighthouse runtime failure, or a completed route without usable performance evidence. The actual runtime error and route diagnostics determine the cause.",
+    steps: ["Open the affected route and confirm it serves the intended page rather than a compilation overlay, redirect loop, or authentication block.", "Inspect message, errorReason, metadata.routeDiagnostics, and completed-page counts in report.json when present.", "Resolve the specific project/runtime issue, then rerun the same route with sufficient budgets. Do not turn an unavailable performance value into a passing score."],
+    command: "qa-check . --profile report --route / --lighthouse-route-timeout-ms 60000", confirm: "The route completes Lighthouse execution with usable evidence; remaining partial scope or missing scores still require review.", related: "/docs/reports#quality-scores", source: "src/checks/lighthouse.ts; src/tests/lighthouseTimeouts.test.ts",
+  },
+  {
+    id: "audit-timeouts", title: "An audit or route times out", kind: "Scan evidence",
+    symptoms: "TIMEOUT, PARTIAL, Application readiness timed out after …, a Lighthouse route-timeout message, or Overall scan execution deadline exceeded appears.",
+    causes: "The application is not ready, a route is slow or stuck, or an execution budget is too small. Lighthouse per-route and total limits are separate.",
+    steps: ["Identify the timed-out stage: readiness, browser route work, a scanner, or Lighthouse. Read the last recorded reason/phase.", "Fix startup/route errors before increasing limits. Reduce the audit to known routes to isolate the problem.", "For Lighthouse, choose integer budgets within the implemented bounds: per-route 1–120000ms and total 1–600000ms. Other runtime limits are configuration settings, not interchangeable CLI flags.", "Rerun comparable scope and inspect completed pages, route audits, and scoreEvidence."],
+    command: "qa-check . --profile report --route / --lighthouse-route-timeout-ms 60000 --lighthouse-budget-ms 180000", confirm: "The selected checks complete their intended scope; a report-only exit of 0 does not prove timeouts were resolved.", related: "/docs/commands#profiles", source: "src/core/readiness.ts; src/core/engine.ts; src/checks/lighthouse.ts",
+  },
+  {
+    id: "configuration", title: "Configuration is missing or invalid", kind: "CLI configuration",
+    symptoms: "Failed to read qa-check.config.json, a runtime.… validation error, or a message saying no API cases or E2E flows were configured.",
+    causes: "Malformed JSON, out-of-range settings, the wrong working directory, or no configuration for an optional feature. A missing config is allowed for a normal audit.",
+    steps: ["Confirm the target directory and inspect qa-check.config.json. The loader can use a parent config in its supported parent-project case; it does not search arbitrarily far upward.", "Correct JSON syntax and supported value types. Ordinary parse failures warn and leave defaults; validated runtime and Lighthouse route-timeout errors can stop execution.", "If starting from scratch, qa-check init . creates missing config/workflow files and skips existing ones. Review its sample API case and workflow; init does not repair malformed files.", "Add api or flows only when intended. Use the verified configuration shapes in the command reference."],
+    command: "qa-check init .\nqa-check --help", confirm: "No parse/validation warning remains and the command loads the intended settings. Defaults being used is not proof that your configuration was accepted.", related: "/docs/commands#api-configuration", source: "src/core/config.ts; src/core/init.ts; src/index.ts",
+  },
+  {
+    id: "build-validation", title: "Build or validation checks fail", kind: "Project",
+    symptoms: "A build, TypeScript, or lint check reports FAIL, ERROR, SKIPPED, or NOT_APPLICABLE. Output can include project compiler errors, No build script found, or ESLint requested interactive setup; linting did not execute.",
+    causes: "A real build/type/lint problem, missing dependencies, an absent build script, or tooling that cannot run non-interactively.",
+    steps: ["Read the check's stdout/stderr and confirm the detected framework and package scripts.", "Install intended project dependencies and run its own build/type/lint command directly. npm run build is appropriate only when that script exists.", "Fix the project error or configure its tool for non-interactive use. Disabling output formats or lowering thresholds does not repair it.", "Repeat the audit. Review intentionally non-applicable tools separately from PASS."],
+    command: "# If this project defines a build script:\nnpm run build\nqa-check . --profile report", confirm: "Project validation succeeds and the audit check completes with the expected status. Native toolchains may need separate setup.", related: "/docs/errors#build-validation", source: "src/build.ts; src/checks/command.ts; src/checks/project.ts",
+  },
+  {
+    id: "incomplete-coverage", title: "Scan coverage is incomplete", kind: "Scan evidence",
+    symptoms: "INCOMPLETE AUDIT, PROVISIONAL, INSUFFICIENT_EVIDENCE, or SKIPPED/PARTIAL/TIMEOUT/BLOCKED results appear even with a high overallScore.",
+    causes: "Unexecuted checks, a reduced fast profile, unavailable prerequisites, or routes that were not fully audited.",
+    steps: ["Inspect results, scoreEvidence.missingScanners, and currentQualityGate.reasons when present.", "Resolve unexpected skips and blocked/errored checks, and inspect per-route coverage. PARTIAL counts toward scanner execution coverage without guaranteeing full route coverage.", "Rerun the intended scope with the right tools/profile. Use comparable scope when reviewing improvements and baselines."],
+    command: "qa-check . --profile report", confirm: "Review scoreEvidence and actual route/scanner completion, not just overallScore. NOT_APPLICABLE differs from an unexpected skip.", related: "/docs/reports#quality-scores", source: "src/core/report.ts; src/tests/productionReliability.test.ts; src/tests/lab10Runtime.test.ts",
+  },
+  {
+    id: "missing-reports", title: "Expected report files are missing", kind: "Report output",
+    symptoms: "report.json, index.html, report.md, or report.pdf is absent, or PDF generation failed is printed.",
+    causes: "A disabled format, different output directory/detected root, early fatal error/interruption, write failure, or caught PDF-generation failure.",
+    steps: ["Check --output, configuration, and format flags. Reports default to the detected project's reports directory, not necessarily your shell directory.", "Help, doctor, standalone api, and flow commands do not run the normal report-generation path.", "For a normal audit, explicitly enable desired formats and select writable output. Inspect write errors and the PDF-specific message.", "Open the new files and confirm the intended run. An old report is not evidence of a successful retry."],
+    command: "qa-check . --profile report --json --html --markdown --pdf --output audit-reports", confirm: "Enabled files are present under the selected output directory and contain the latest intended run's results.", related: "/docs/reports#report-files", source: "src/core/report.ts; src/core/engine.ts; src/reporters/json.ts; src/index.ts",
+  },
+  {
+    id: "permissions", title: "Output or source access is denied", kind: "Environment",
+    symptoms: "The OS reports EACCES/EPERM, a report write fails, or doctor reports reports/ directory is not writable. These are environment diagnostics, not universal QA Check error numbers.",
+    causes: "Your account lacks access or the file is locked/restricted by the environment.",
+    steps: ["Read the affected path and operation. Distinguish a source read, npm installation, and report write.", "Choose a directory you are authorized to write to. --output changes audit output; doctor still tests the default reports directory.", "For a known locked file, close only its owning application or ask its owner. Do not delete project data or weaken security settings."],
+    command: "qa-check . --profile report --output audit-reports", confirm: "The affected read/write succeeds and a new report appears. Changing output cannot repair unreadable source files.", related: "/docs/installation#common-issues", source: "src/core/doctor.ts; src/reporters/json.ts; src/tests/sourceGlob.test.ts",
+  },
+];
+
