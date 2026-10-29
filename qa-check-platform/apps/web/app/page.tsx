@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function Home() {
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 text-slate-950">
@@ -13,8 +15,9 @@ export default function Home() {
           <h1 className="text-5xl font-bold leading-tight tracking-tight sm:text-7xl">QA Check Platform</h1>
           <p className="mt-8 text-2xl leading-relaxed text-slate-600 sm:text-3xl">Automated Quality Assurance for Development Teams</p>
           <div className="mt-10 inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-800">
-            <span aria-hidden="true" className="h-2 w-2 rounded-full bg-indigo-500" />Platform foundation · In development
+            <span aria-hidden="true" className="h-2 w-2 rounded-full bg-indigo-500" />Platform · In development
           </div>
+          <nav aria-label="Account" className="mt-8 flex gap-6 font-semibold text-indigo-700"><Link href="/register">Create an account</Link><Link href="/login">Sign in</Link></nav>
         </section>
       </main>
       <footer className="border-t border-slate-200 px-6 py-6 text-center text-sm text-slate-500">Built for teams that care about quality.</footer>

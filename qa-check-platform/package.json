@@ -12,6 +12,9 @@
     "start:web": "npm run start --workspace=@qa-check-platform/web",
     "start:api": "npm run start --workspace=@qa-check-platform/api",
     "db:validate": "npm run db:validate --workspace=@qa-check-platform/api",
-    "db:check": "npm run db:check --workspace=@qa-check-platform/api"
+    "db:check": "npm run db:check --workspace=@qa-check-platform/api",
+    "db:generate": "npm run db:generate --workspace=@qa-check-platform/api",
+    "db:migrate": "npm run db:migrate --workspace=@qa-check-platform/api",
+    "test": "npm run test --workspace=@qa-check-platform/api"
   }
 }

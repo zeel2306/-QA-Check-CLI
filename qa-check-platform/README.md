@@ -1,103 +1,139 @@
-# QA Check Platform — Step 1
+# QA Check Platform — Step 4: basic project management
 
-Standalone npm-workspaces application. The parent repository is the existing CLI; its code and package files are unchanged. Run all commands below from this folder, not the parent CLI folder.
+The existing Next.js, Express, TypeScript, PostgreSQL and Prisma 7 architecture is retained. Run commands from this directory on platform-branch.
 
-## Prerequisites
+## Setup (PowerShell)
 
-- Node.js 22.12+ (Node.js 24 LTS recommended) and npm 10+.
-- PostgreSQL installed locally only if you want to verify database access.
-- Two Windows PowerShell terminals for development.
-
-## Installation (Windows PowerShell)
+Requires Node 22.12+ and a running PostgreSQL database.
 
 ```powershell
-Set-Location C:\Users\monil\qa-check\qa-check-platform
-node --version
-npm.cmd --version
 npm.cmd ci
-Copy-Item apps/web/.env.example apps/web/.env.local
+# Copy only if these local files do not exist:
 Copy-Item apps/api/.env.example apps/api/.env
+Copy-Item apps/web/.env.example apps/web/.env.local
+node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
 ```
 
-Copy environment examples once; preserve your edited files on later installs. Using npm.cmd avoids PowerShell script execution-policy restrictions.
-
-Edit `apps/api/.env` with your PostgreSQL username, password, host, port and existing database name. Percent-encode special characters in URL credentials. No application tables or migrations are needed in Step 1. If creating a local database with PostgreSQL's SQL Shell, run:
-
-```sql
-CREATE DATABASE qa_check_platform;
-```
-
-The example credentials are placeholders. PostgreSQL is not required to run the homepage or health endpoint.
-
-## Development
-
-Terminal 1:
+Put the generated secret in SESSION_SECRET in apps/api/.env. Set DATABASE_URL to a working PostgreSQL database; example credentials are placeholders. Do not commit environment files.
 
 ```powershell
-Set-Location C:\Users\monil\qa-check\qa-check-platform
-npm.cmd run dev:web
-```
-
-Terminal 2:
-
-```powershell
-Set-Location C:\Users\monil\qa-check\qa-check-platform
+npm.cmd run db:validate
+npm.cmd run db:generate
+npm.cmd run db:check
+npm.cmd run db:migrate
 npm.cmd run dev:api
 ```
 
-Open http://localhost:3000. The API uses http://localhost:4000. Stop either server with Ctrl+C.
+In another terminal in this directory:
 
 ```powershell
-Invoke-RestMethod http://localhost:4000/api/health
+npm.cmd run dev:web
 ```
 
-Expected JSON: `{"status":"ok","service":"qa-check-platform-api"}`. This endpoint confirms the HTTP server only; it does not check PostgreSQL.
+Open http://localhost:3000/register or /login. Registration creates an account and presents a sign-in link. Login redirects to /dashboard. The dashboard validates the session on the server.
 
-## Validation and production startup
+Production: generate the client, deploy migrations, run npm.cmd run build, then run npm.cmd run start:api and npm.cmd run start:web in separate terminals. Set NODE_ENV=production and serve both applications over HTTPS.
+
+## Configuration and security
+
+API environment: PORT (4000), DATABASE_URL (required), FRONTEND_ORIGIN (http://localhost:3000), SESSION_SECRET (required, at least 32 characters), SESSION_TTL_HOURS (168), BCRYPT_ROUNDS (12, minimum 12), AUTH_RATE_LIMIT (20 attempts per IP per 15 minutes shared by login/register).
+
+Web: leave NEXT_PUBLIC_API_URL empty to use the same-origin authentication proxy. API_URL is the internal API origin (default http://localhost:4000) used by both the proxy and dashboard. Build with the correct API_URL. If overriding the browser URL, frontend and API must use the same hostname so the host-only cookie reaches server-side dashboard checks. The default proxy supports a private API origin in production.
+
+Authentication POST requests require the exact configured Origin and application/json, including logout. CORS allows credentials for that origin. Cookies are HttpOnly, SameSite=Lax, path=/, and Secure with a __Host- name in production. Tokens have 256 bits of randomness; PostgreSQL stores only an HMAC hash. Rotating SESSION_SECRET revokes existing sessions. Login replaces the current cookie's session. Expired or revoked sessions receive 401. Logout deletes the database session before clearing the cookie. Passwords use bcrypt; registration requires 12 characters and at most 72 UTF-8 bytes.
+
+Rate limiting is in memory per API process; multi-instance deployments require a shared store. Express does not trust forwarded IP headers by default. Configure only the actual trusted reverse proxy before deployment, and enforce HTTPS there. Expired sessions are removed when presented or on that user's next login; deployments can schedule cleanup for storage maintenance.
+
+## API
+
+| Method | Endpoint | Result |
+| --- | --- | --- |
+| POST | /api/v1/auth/register | name/email/password; 201, 400 validation, 409 duplicate |
+| POST | /api/v1/auth/login | email/password; 200 plus cookie, 401 invalid credentials |
+| POST | /api/v1/auth/logout | JSON {}; 204; idempotently revokes current session |
+| GET | /api/v1/auth/me | 200 public user or 401 |
+
+POSTs return 403 for disallowed origin/content type. Login/register can return 429. Password hashes and internal errors never appear in responses. Email is trimmed and normalized to lowercase; a database unique constraint also prevents concurrent duplicates.
+
+## Verification
 
 ```powershell
 npm.cmd run typecheck
 npm.cmd run build
-npm.cmd run db:validate
-npm.cmd run db:check
+npm.cmd test
 ```
 
-`db:check` runs a read-only `SELECT 1` against DATABASE_URL and exits nonzero on failure. It creates no tables. A running PostgreSQL service alone does not verify credentials or database access.
+Default tests cover validation, CORS, origin protection, rate limiting, malformed input, anonymous sessions and cookie clearing without PostgreSQL. The database lifecycle test is skipped unless TEST_DATABASE_URL points to a migrated disposable test database. Set that variable locally and run npm.cmd test. It creates a unique account and deletes only that account; sessions cascade. It covers registration, normalization, duplicates, password hashing, login, session rotation, expiry and logout. Browser/dashboard rendering needs separate web verification.
 
-After building, run `npm.cmd run start:web` and `npm.cmd run start:api` in separate terminals.
+Migration 20261027000000_authentication creates User and Session tables, unique email/token indexes, session lookup indexes and a cascading user foreign key. UUIDs are generated by Prisma. This foundation migration contains authentication tables; the additive role migration is documented below.
 
-## Structure and configuration
+Next.js uses the supported webpack mode for development and builds because Turbopack failed to start its CSS worker on this Windows machine.
 
-- `apps/web/app`: App Router homepage, root layout and Tailwind CSS 4 styles.
-- `apps/web/.env.example`: optional public API origin reserved for future requests; the current homepage does not call the API.
-- `apps/api/src/server.ts`: Express HTTP server; PORT defaults to 4000.
-- `apps/api/src/check-db.ts`: explicit PostgreSQL connection check.
-- `apps/api/prisma.config.ts`: Prisma 7 connection URL and schema configuration.
-- `apps/api/prisma/schema.prisma`: PostgreSQL datasource and modern client generator; no models.
-- `package-lock.json`: exact dependency resolution; commit it and use npm ci.
+## Step 3 — role-based dashboards
 
-Prisma 7 uses the URL in prisma.config.ts and the PostgreSQL driver adapter at runtime. The adapter and client packages are installed for ORM setup. No application client is generated or instantiated yet because there are no models or database-backed features. Add models, generate the client and wire the adapter only in an approved later step. Do not run migrations or db push for this empty foundation.
+Each user has one role: ADMIN, DEVELOPER, or QA. Existing accounts and all new public registrations default to DEVELOPER. Public registration rejects extra fields, including role. There is no public role-changing endpoint. The current database role is loaded for every session-authenticated API request; changing a role does not require replacing the session.
 
-References: [Prisma PostgreSQL configuration](https://www.prisma.io/docs/orm/v7/core-concepts/supported-databases/postgresql), [Next.js installation](https://nextjs.org/docs/app/getting-started/installation), [Tailwind with Next.js](https://tailwindcss.com/docs/installation/framework-guides/nextjs).
+Dashboard pages:
 
-No authentication, dashboards, project management, CLI integration, paid services or external integrations are included.
+- http://localhost:3000/dashboard redirects to the signed-in user's dashboard.
+- http://localhost:3000/dashboard/admin
+- http://localhost:3000/dashboard/developer
+- http://localhost:3000/dashboard/qa
 
-## Verification performed
+Protected APIs on http://localhost:4000:
 
-- npm install completed; npm audit reported zero known vulnerabilities at installation time.
-- Both workspace TypeScript checks passed.
-- Next.js production build and Express TypeScript build passed.
-- GET /api/health returned HTTP 200 and the expected JSON.
-- Production homepage returned HTTP 200 and contained the required title and tagline.
-- Prisma schema validation passed with no models or tables.
-- Local PostgreSQL 18 was running, but db:check failed because it rejected the example postgres password. Database access is NOT verified. Update apps/api/.env with valid credentials and rerun npm.cmd run db:check.
+- GET /api/v1/dashboard/admin — ADMIN only
+- GET /api/v1/dashboard/developer — DEVELOPER only
+- GET /api/v1/dashboard/qa — QA only
+- GET /api/v1/auth/me now includes role.
 
-Port 3000 was already occupied on the validation machine. To use another frontend port:
+Unauthenticated APIs return 401; another role returns 403. ADMIN does not inherit other role dashboards. Server-rendered pages redirect wrong-role users to their own dashboard. All cards are explicitly marked demo data; no projects, scans, defects, or organization features are implemented.
+
+### Create local test users
+
+Register each account normally at /register, then sign in at /login. The initial role is always DEVELOPER. To assign an existing local account a role, use the following from qa-check-platform:
 
 ```powershell
-npm.cmd run dev --workspace=@qa-check-platform/web -- --port 3100
-# Or, after building:
-npm.cmd run start --workspace=@qa-check-platform/web -- --port 3100
+npm.cmd run user:set-role --workspace=@qa-check-platform/api -- --email admin@example.com --role ADMIN --confirm-local-role-change
+npm.cmd run user:set-role --workspace=@qa-check-platform/api -- --email qa@example.com --role QA --confirm-local-role-change
+npm.cmd run user:set-role --workspace=@qa-check-platform/api -- --email developer@example.com --role DEVELOPER --confirm-local-role-change
 ```
 
-For a different API port, edit PORT in apps/api/.env.
+Replace these emails with accounts you registered. These are examples, not pre-created users. The command requires explicit confirmation, NODE_ENV=development, a loopback DATABASE_URL host, and an existing account. It refuses production and remote database targets. It does not create accounts or print passwords. Existing sessions use the updated role on their next request; open dashboards revalidate on focus and periodically.
+
+Migration 20261028000000_user_roles adds a PostgreSQL Role enum and a non-null User.role column with DEVELOPER as its default. It does not delete user data, rewrite password hashes, or change Session records. Apply it with the existing db:migrate script after db:generate. Restart the API after generating the client.
+
+Run npm.cmd run typecheck, npm.cmd run build, and npm.cmd test. Supply TEST_DATABASE_URL for the database-backed authentication and role access-matrix tests; otherwise those tests are explicitly skipped. The suite also checks the local role assignment guards.
+
+## Step 4 — basic project management
+
+Project pages are available at /projects, /projects/new and /projects/[id]. Editing uses /projects/[id]?edit=1 and reuses the create form. The existing dashboards and project pages share a navigation shell with a working Projects link. Search and pagination use URL query parameters, and all projects use real stored data rather than demo dashboard metrics.
+
+### Temporary single-workspace authorization
+
+All authenticated users can view active projects. ADMIN and DEVELOPER can create and edit active projects. QA is read-only. Only ADMIN can archive, restore or explicitly view archived projects. A project cannot be edited until restored. These permissions intentionally share a single workspace: replace them with organization-scoped authorization before onboarding independent companies. No organization, membership or invitation tables are included.
+
+Project names are trimmed and unique case-insensitively across this temporary workspace (an internal nameKey unique index enforces this, including concurrent requests). Archived projects retain their names. Description is limited to 4,000 characters; name/framework to 100; repository URL to 2,048. Optional fields can be cleared with an empty string or null. Repository URLs must use HTTP/HTTPS without embedded credentials. They are stored only as reference links; there is no GitHub integration or repository synchronization.
+
+### Project API
+
+All endpoints are under http://localhost:4000/api/v1 and require the existing HTTP-only session cookie.
+
+| Method | Endpoint | Access |
+| --- | --- | --- |
+| GET | /projects | All roles; active by default |
+| POST | /projects | ADMIN, DEVELOPER |
+| GET | /projects/:id | All roles for active projects |
+| PATCH | /projects/:id | ADMIN, DEVELOPER; active only |
+| PATCH | /projects/:id/archive | ADMIN |
+| PATCH | /projects/:id/restore | ADMIN |
+
+List query parameters: page (default 1), limit (default 12, maximum 50), q (name/framework search, maximum 100 characters), status (ACTIVE by default or ARCHIVED for ADMIN only). Responses contain projects plus pagination: page, limit, total and totalPages. Stable ordering is newest first, with ID as a tie-breaker.
+
+Archived records are returned only by explicit ADMIN requests: GET /projects?status=ARCHIVED and GET /projects/:id?includeArchived=true. The admin UI carries an archived=1 marker when opening archived details. Ordinary details requests return 404 for archived records. Mutations return project; creation uses 201, validation 400, unauthenticated 401, forbidden 403, missing 404, and duplicate/archived-edit conflicts 409. Creator data contains only a display name. Internal nameKey, password hashes and creator email are never returned.
+
+POST/PATCH requests require the exact configured frontend Origin and application/json. Archive/restore accept an empty JSON object. The existing frontend proxy now includes the projects API; CORS permits PATCH. Roles and createdBy are assigned from the authenticated database user and cannot be set by the request body.
+
+Migration 20261028010000_projects adds ProjectStatus and Project, its normalized-name unique index, status/date/ID list index, creator index and restrictive creator foreign key. It does not alter existing users, sessions or roles. Apply with the existing db:generate and db:migrate scripts. No existing migration was replaced.
+
+Verification commands remain npm.cmd run db:validate, npm.cmd run db:check, npm.cmd run typecheck, npm.cmd run build and npm.cmd test. Set TEST_DATABASE_URL to run the database-backed suites; tests clean up only their generated fixture users/projects.

@@ -9,9 +9,18 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "db:validate": "prisma validate",
-    "db:check": "tsx src/check-db.ts"
+    "db:check": "tsx src/check-db.ts",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "test": "tsx --test tests/*.test.ts",
+    "user:set-role": "tsx src/set-user-role.ts"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express-rate-limit": "^8.1.0",
+    "zod": "^4.1.0",
     "express": "^5.1.0",
     "dotenv": "^17.2.0",
     "pg": "^8.16.0",
@@ -19,6 +28,8 @@
     "@prisma/adapter-pg": "7.10.1"
   },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.9",
+    "@types/cors": "^2.8.19",
     "prisma": "7.10.1",
     "tsx": "^4.20.0",
     "typescript": "~5.9.3",
