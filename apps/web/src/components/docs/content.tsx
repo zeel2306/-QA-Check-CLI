@@ -6,6 +6,7 @@ import styles from "./docs.module.css";
 import type { DocumentationPage } from "./types";
 import { supportDocumentation } from "./support-content";
 import { workspaceSections, platformPage } from "./saas-content";
+import { commandBuilderPage } from "./command-builder/page-content";
 export type { DocumentationPage } from "./types";
 
 function Note({ title, children }: { title: string; children: ReactNode }) {
@@ -230,4 +231,4 @@ const coreDocumentation: DocumentationPage[] = [
   platformPage,
 ];
 
-export const documentation: DocumentationPage[] = [...coreDocumentation, ...supportDocumentation];
+export const documentation: DocumentationPage[] = [...coreDocumentation, ...supportDocumentation, commandBuilderPage];

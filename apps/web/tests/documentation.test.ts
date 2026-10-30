@@ -4,10 +4,10 @@ import { docsNavigation, docsHref } from '../src/components/docs/navigation';
 import { searchDocumentation } from '../src/components/docs/search';
 import { copyText } from '../src/components/docs/clipboard';
 
-test('documentation navigation excludes the deferred builder and has eight guides', () => {
- assert.equal(docsNavigation.length, 8);
- assert.equal(new Set(docsNavigation.map(p => docsHref(p.slug))).size, 8);
- assert(!docsNavigation.some(p => String(p.slug) === 'command-builder'));
+test('documentation navigation includes the migrated builder and preserves eight existing guides', () => {
+ assert.equal(docsNavigation.length, 9);
+ assert.equal(new Set(docsNavigation.map(p => docsHref(p.slug))).size, 9);
+ assert(docsNavigation.some(p => String(p.slug) === 'command-builder'));
 });
 test('search handles empty input, case, multiple terms, and unmatched queries', () => {
  assert.deepEqual(searchDocumentation('  '), []);
@@ -20,7 +20,7 @@ test('search preserves SaaS integration anchors and FAQ/error deep links', () =>
  assert(searchDocumentation('CI secrets').some(r => r.href === '/docs#ci'));
  assert(searchDocumentation('Node.js version').some(r => r.href.startsWith('/docs/faq#')));
  assert(searchDocumentation('error').some(r => r.href.startsWith('/docs/errors#')));
- assert(!searchDocumentation('builder').some(r => r.href === '/docs/command-builder'));
+ assert(searchDocumentation('builder').some(r => r.href === '/docs/command-builder'));
 });
 test('clipboard reports success only after writing the exact text', async () => {
  let actual = ''; assert.deepEqual(await copyText('qa-check .', async text => { actual = text; }), { status: 'copied' });
@@ -44,7 +44,7 @@ test('all documentation guides render with navigation, search, and scoped main',
   const html = await page(docsHref(item.slug));
   assert.match(html, /id="docs-main"/); assert.match(html, /Search documentation/);
   assert.match(html, /aria-current="page"/); assert.match(html, /<h1>/);
-  assert(!html.includes('href="/docs/command-builder"'));
+  assert(html.includes('href="/docs/command-builder"'));
  }
 });
 test('all documentation internal links and fragments resolve', options, async () => {
@@ -62,8 +62,8 @@ test('upload and CI handbook anchors and precautions remain available', options,
  for (const text of ['id="upload"', 'id="ci"', 'QA_CHECK_PROJECT_ID', 'QA_CHECK_TOKEN', 'clientRunId', '2 MiB', 'fork pull requests', 'ConvertTo-Json -Depth 30']) assert(html.includes(text), text);
  assert.match(html, /22\.19\.0/); assert(!html.includes('Node.js 20 or later'));
 });
-test('unknown and deferred documentation slugs return HTTP 404', options, async () => {
- for (const path of ['/docs/unknown-guide', '/docs/command-builder']) assert.equal((await fetch(new URL(path, origin!))).status, 404, path);
+test('unknown documentation slugs still return HTTP 404 after builder migration', options, async () => {
+ for (const path of ['/docs/unknown-guide', '/docs/another-unknown']) assert.equal((await fetch(new URL(path, origin!))).status, 404, path);
 });
 
 test('every search-index destination and fragment resolves', options, async () => {

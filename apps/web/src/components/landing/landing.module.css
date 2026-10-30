@@ -15,11 +15,11 @@
 }
 
 .landing {
-  --ink: #172321;
-  --muted: #56615c;
+  --ink: #f8fafc;
+  --muted: #9aa9bd;
   --lime: #d9f976;
-  --line: #dce2d9;
-  background: #fafbf7;
+  --line: #233047;
+  background: #080d17;
   color: var(--ink);
   font-family: Arial, Helvetica, sans-serif;
   font-size: 16px;
@@ -1325,4 +1325,76 @@
     gap: 10px;
     font-size: 9px;
   }
+}
+
+/* Public-site dark palette. Brand mark styling remains unchanged. */
+.landing {
+  --qc-bg: #080d17;
+  --qc-sidebar: #0b1220;
+  --qc-surface: #111b2b;
+  --qc-raised: #172338;
+  --qc-border: #233047;
+  --qc-primary: #2563eb;
+  --qc-primary-hover: #1d4ed8;
+  --qc-link: #60a5fa;
+  --qc-text: #f8fafc;
+  --qc-muted: #94a3b8;
+  background: var(--qc-bg);
+  color: var(--qc-text);
+}
+
+.header { background: #0b1220; border-color: var(--qc-border); }
+.navLinks { color: #cbd5e1; }
+.navLinks a:hover, .footer a:hover, .sourceLinks a:hover { color: var(--qc-link); }
+.releasePill { background: #111b2b; border-color: #233047; color: #cbd5e1; }
+.statusDot { background: #22c55e; }
+.hero h1 > span:first-child { color: #60a5fa; }
+.heroPeriod { color: #60a5fa; }
+.heroDescription, .heroNotes, .headingRow > p, .sectionHeading > p:last-child,
+.featureCard p, .steps p, .workflowNote, .comparison p, .platformDisclaimer,
+.openSource > div > p, .footerTop > div > p { color: #94a3b8; }
+.primaryButton, .navCta { background: #2563eb; border-color: #2563eb; color: white !important; }
+.primaryButton:hover, .navCta:hover { background: #1d4ed8; }
+.secondaryButton { border-color: #334155; color: #e2e8f0; }
+.secondaryButton:hover { background: #172338; }
+.scopeStrip, .workflowSection { background: #0b1220; border-color: #233047; }
+.scopeStrip p { color: #cbd5e1; }
+.featureCard, .preview, .installPanel { background: #111b2b; border-color: #233047; }
+.featureIcon, .comparisonIcon { background: #172338; color: #60a5fa; }
+.featureCard h3, .comparison h3, .installPanel h3 { color: #f8fafc; }
+.available { color: #86efac; background: #123524; }
+.planned { color: #fde68a; background: #3b2d11; }
+.comparison ul { border-color: #233047; }
+.comparison li small { color: #94a3b8; }
+.platformCard { background: #101a2a; border-color: #2d4260; }
+.cliCard { background: #111b2b; border-color: #233047; color: #f8fafc; }
+.cliCard .comparisonTop, .cliCard .comparison li { color: #cbd5e1; }
+.cliCard .comparisonTop .eyebrow { color: #94a3b8; }
+.cliCard .comparison h3 { color: #f8fafc; }
+.cliCard .secondaryButton { color: #e2e8f0; }
+.openSource { background: #111b2b; border-color: #233047; }
+.installHeader { color: #94a3b8; }
+.command { background: #080d17; border-color: #334155; }
+.command code { color: #e2e8f0; }
+.footer { border-color: #233047; }
+.footerBottom { border-color: #233047; color: #94a3b8; }
+.skipLink { background: #2563eb; color: white; }
+.landing :is(a, button):focus-visible { outline-color: #60a5fa; }
+
+@media (max-width: 820px) {
+  .navLinks { background: #0b1220; }
+}
+@media (max-width: 540px) {
+  .navLinks { background: #0b1220; }
+}
+@media (max-width: 820px) {
+  .navLinks {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 20px;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+  }
+  .navLinks::-webkit-scrollbar { display: none; }
 }
